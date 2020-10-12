@@ -1,0 +1,2352 @@
+---
+title: "Modélisation de l’expression des gènes olfa- PARTIE 1"
+author: "Kodjo & Ana & Anne & Anh"
+date: "`r Sys.Date()`"
+output: 
+  rmarkdown::html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: true
+---
+
+```{r, echo=FALSE, eval=TRUE}
+knitr::opts_chunk$set(collapse=TRUE, comment = "#>", fig.width=9, fig.height=6, eval=TRUE, echo=FALSE, message = FALSE, warning = FALSE)
+#rmarkdown::render("modelisation.Rmd", output_format="html_document", encoding="UTF-8")
+
+```
+
+
+# Données utilisées
+
+## gènes
+
+
+```{r}
+
+#chargement des données
+study_gtex_filename = "study_gtex.rds"
+if (!exists("study_gtex")) {
+  print("Loading study_gtex...")
+  study_gtex = readRDS(study_gtex_filename)  
+}
+s = study_gtex
+
+#creation data_raw = données brutes 
+data_raw = as.matrix(s$stuffs$raw_counts)
+
+#normalisation DESeq2 -> cration data_norm = données normalisées
+countData = data_raw
+colData = data.frame(id=colnames(countData))
+dds = DESeq2::DESeqDataSetFromMatrix(countData=countData, colData=colData, design= ~ id)
+dds = DESeq2::estimateSizeFactors(dds)
+data_norm = ceiling(DESeq2::counts(dds, normalized=TRUE))
+
+#creation de data_lnorm = données log transfo
+data_lnorm = log2(data_norm + 1)
+
+# transpose des 3 jeux --> données concernant tous les gènes
+data_raw_all = t(data_raw)
+data_norm_all = t(data_norm)
+data_lnorm_all = t(data_lnorm)
+
+# données des gènes olfa
+#creation de data_raw = données brutes des genes olfa uniquement
+# data_temp = jeu de données temporaire
+data_temp = t(data_raw)
+#recuperation liste des genes olfa
+olfa = readRDS("features_olfa.rds")
+#recherche des genes olfa dans les donnees et insertion dans une variable nommée olfa
+olfa = intersect(rownames(olfa), colnames(data_temp))
+# data_raw = creation d'un jeu de données brutes avce uniquement les genes olfa
+data_raw = data_temp[,olfa]
+
+#creation de data_norm = données normalisées des gènes olfa
+data_norm = data_norm_all[,olfa]
+
+#creation de data_lnorm = données normalisées log transformées des gènes olfa
+data_lnorm = data_lnorm_all[,olfa]
+
+
+
+#creation d'un jeu de données avec des gènes random, on sélectionne autant de gènes qu'il y a de gènes olfa soit 384 -> permet de comparer nos résultats par la suite
+set.seed(1)
+rnd = sample(rownames(s$stuffs$raw_counts), ncol(data_raw))
+# data_raw_rnd = genes random sur données brutes
+data_raw_rnd = data_raw_all[,rnd]
+# data_norm_rnd = genes random sur données normalisées
+data_norm_rnd = data_norm_all[,rnd]
+# data_lnorm_rnd = genes random sur données normalisées log transformées
+data_lnorm_rnd = data_lnorm_all[,rnd]
+
+```
+
+
+## tissus
+
+```{r}
+#liste des tissus correspondant à chaque ecchantillon pour chaque jeu de donées olfa, rnd et all
+tissue_olfa = s$exp_grp[rownames(data_raw),]$tissue_group_level1
+
+tissue_rnd = s$exp_grp[rownames(data_raw_rnd),]$tissue_group_level1
+
+tissue_all = s$exp_grp[rownames(data_raw_all),]$tissue_group_level1
+
+#TO DO: si on a le temps, pendant la relecture verifier si tissue = tissue_olfa 
+tissue = tissue_olfa  
+
+```
+
+```{r}
+#package necessaires
+library(knitr)
+library(kableExtra)
+library(tidyverse)
+library(dplyr)
+```
+
+
+
+# Construction des modèles 
+
+
+
+## Modèlisation à l'aide d'une loi Normale 
+
+Dans un premier temps, on modélise nos gènes par la loi Normale pour voir si celle-ci peut être adaptée. On utilise le jeu de données normalisées et log transformées (normalisation DESeq2 auxquelles on ajoute 1 et on applique le log).
+
+
+### Modèle nul 
+
+Pour l’estimation des paramètres du modèle nul, nous utilisons la méthode des moments. On procède de la façon suivante: 
+- l’estimation de $\mu$ est faite par la moyenne de chaque gène 
+- l’estimation de $\sigma$ est faite par l’écart-type de chaque gène 
+- à l’aide de la fonction dnorm on génère des données issues de la normale théorique, avec les paramètres estimés 
+-  la vraisemblance est calculée sur nos données à l’aide des résultats précédents et on applique la somme des log pour obtenir le log vraisemblance
+
+
+La fonction ainsi créé renvoie les données suivantes:
+- mu = moyenne estimée
+- sigma = écart-type estimé
+- LogL = le log vraisemblance à partir de ces données
+
+
+```{r}
+normal_fch = function(data_lnorm) {
+  
+  norm = t(apply(data_lnorm, 2, function(c) {
+    mu = mean(c)
+    sigma = sd(c)
+    proba = dnorm(c, mu, sigma)
+    L = prod(proba)
+    logL = sum(log(proba))
+    return(c(mu=mu, sigma=sigma, logL=logL))
+  }))
+  return(data.frame(norm))
+}
+```
+
+Ci-dessous l'affichage des premières lignes de cette fonction appliquées sur les gènes *OLFA*.
+
+```{r}
+#application de la fonction de modelisation de la loi normale sur nos données olfa
+norm_olfa = normal_fch(data_lnorm)
+
+kable(head(norm_olfa), format = "html", digits = 3, caption = "Résultats de la modelisation loi normale")%>%
+  kable_styling(full_width = F)
+```
+
+
+### Application de la modèlisation sur nos quatre familles de gènes
+
+Dans la partie concernant les statistiques descriptives, nous avons identifié qu'il y avait quatre distributions dans nos données et avons extrait quatre gènes qui représentaient bien ces quatre types. Pour rappel: 
+- 
+
+Nous allons utiliser ces quatre gènes pour faire des comparaisons graphiques entre la distribution des données de ces gènes et la loi modélisées. Nous effecturons cette procédure pour chacune des modélisations que nous allons effectuer par la suite. 
+
+
+Voici la comparaison graphique de la densité des quatre gènes avec la densité de la loi normale: 
+
+
+
+```{r, fig.show='hold', out.width="50%", fig.cap="Modelisation de la loi normale"}
+
+c1 = data_lnorm[,"OR2G3"]
+c2 = data_lnorm[,"OR2W3"]
+c3 = data_lnorm[,"ADCY3"]
+c4 = data_lnorm[,"CAMK2A"]
+
+mu1 =  norm_olfa["OR2G3",]$mu
+mu2 =  norm_olfa["OR2W3",]$mu
+mu3 =  norm_olfa["ADCY3",]$mu
+mu4 =  norm_olfa["CAMK2A",]$mu
+
+sigma1 = norm_olfa["OR2G3",]$sigma
+sigma2 = norm_olfa["OR2W3",]$sigma
+sigma3 = norm_olfa["ADCY3",]$sigma
+sigma4 = norm_olfa["CAMK2A",]$sigma
+  
+#layout(matrix(1:1), respect=TRUE)
+plot(density(c1), main = "OR2G3")
+x = seq(min(c1), max(c1), length.out=100)
+lines(x, dnorm(x, mean = mu1, sd = sigma1), col = "red", lty = 2)
+#legend("topleft", c("Observation", "modele"), lty=1:1, col=c("black", "grey"))
+
+plot(density(c2), main="OR2W3")
+x = seq(min(c2), max(c2), length.out=100)
+lines(x, dnorm(x, mean=mu2, sd=sigma2), col="red", lty=2)
+#legend("topleft", c("Observation", "modele"), lty=1:1, col=c("black", "grey"))
+
+plot(density(c3), main="ADCY3")
+x = seq(min(c3), max(c3), length.out=100)
+lines(x, dnorm(x, mean=mu3, sd=sigma3), col="red", lty=2)
+#legend("topleft", c("Observation", "modele"), lty=1:1, col=c("black", "grey"))
+
+plot(density(c4), main="CAMK2A")
+x = seq(min(c4), max(c4), length.out=100)
+lines(x, dnorm(x, mean = mu4, sd = sigma4), col="red", lty=2)
+#legend("topleft", c("Observation", "modele"), lty=1:1, col=c("black", "grey"))
+
+```
+
+Graphiquement, on peut voir que la loi normale s'adapte mal aux gènes qui sont riches en zéro comme le gène *OR2G3* et *OR2W3*. 
+
+Pour le gène *ADCY3*, l'adéquation semble meilleure que pour les autres gènes. Enfin pour le gène *CAMK2A* la loi normale s'adapte mal dû à la forte dispersion des données. 
+
+La loi Normale ne semble pas être une loi adéquate pour la modélisation de nos gènes. 
+
+
+
+### Modèle avec tissu :  anova 
+
+Malgré les résultats qui nous semblent peu en adéquation avec une modélisation par la loi Normale,  nous avons cherché à connaître l'influence des tissus avec cette modélisation. 
+Ainsi nous avons fait une exploration à l'aide d'une ANOVA.
+
+```{r}
+# Anova : recherche de l'effet du tissu sur les comptages 
+
+#fonction qui prend un jeu de données en entrée et une variable ici tissu
+anova_lnorm = function(data_lnorm, tissue){
+  foo = t(apply(data_lnorm,2,function(c) {
+    
+    # creation d un modèle linéaire nommé m 
+    m = lm(c~tissue)
+    
+    # f désigne la statistique du test de Fisher et pvaov la pvaleur.
+    # les éléments retournés par la fonction sont les suivants 
+    
+    c(
+    r2 = summary(m)$r.squared , 
+    f = anova(m)[1,4]         ,
+    pvaov = anova(m)[1,5]
+    ) 
+    
+  }))
+  data.frame(foo)
+}
+```
+
+#### sortie du modèle anova
+
+
+```{r}
+#application de la fonction avec anova sur les genes olfa
+anova_olfa = anova_lnorm(data_lnorm,tissue_olfa)
+```
+
+Voici les premières lignes de cette exploration par l'anova:
+
+```{r}
+
+kable(head(anova_olfa), format = "html", digits = 3, caption = "Anova genes olfa")%>%
+  kable_styling(full_width = F)
+```
+
+
+
+Le seuil de significativté de test multiples est ajusté par la méthode de Bonferroni. Initialement fixé à 0.05 pour chaque test, ce seuil est ajusté par le nombre de test effectué. Ce nombre correspond au nombre total de gènes soit 22904.
+
+La valeur de bonferroni est donc de: bonf = 0.05/22904
+
+```{r}
+bonf_pval = 0.05/ncol(data_raw_all)
+```
+
+
+```{r}
+#calcul proportion de test significatif pour les gènes olfa
+si <- round(sum(anova_olfa$pvaov<bonf_pval)/384, 2)*100
+#> [1] 0.8645833
+
+```
+
+Lorsque l'on calcule la proportion de test qui est significatif pour les gènes *olfa*, on obtient `r si`. 
+
+
+On applique l'ANOVA sur l'ensemble des gènes.
+
+```{r}
+#ANOVA pour tous les genes
+anova_all = anova_lnorm(data_lnorm_all,tissue_all)
+```
+
+```{r}
+#nous voyons qu'il 1 valeur manquantes dans l'ensemble des pvaov 
+ sum(is.na(anova_all$pvaov))
+sum(anova_all$pvaov < bonf_pval,na.rm = TRUE)/nrow(anova_all-sum(is.na(anova_all$pvaov)))
+```
+
+On applique l'ANOVA sur nos gènes random.
+
+
+```{r}
+#* essai avec les gènes pris au hasard
+anova_rnd = anova_lnorm(data_lnorm_rnd, tissue_rnd)
+
+kable(head(anova_rnd), format = "html", digits = 3, caption = "Anova genes random")%>%
+  kable_styling(full_width = F)
+
+sum(anova_rnd$pvaov < bonf_pval,na.rm = TRUE)/nrow(anova_rnd-sum(is.na(anova_rnd$pvaov)))
+```
+
+En conclusion de l'ANOVA,  on peut voir que les gènes *olfa* sont significatifs pour plus de 86% alors que pour l'ensemble des gènes on est à 94% et pour les gènes random on est à 96%. Ce qui laisse penser que la forte proportion de zéro est un "perturbateur" de ces résultats. 
+
+
+Le modèle linéaire classique donne des résultats plutôt convaincants à propos l’influence du tissu sur les gènes olfa cependant compte tenu de la nature discrète de nos données . La puissance statistique du modèle anova n’est plus la même, et aussi l’interprétatation n’est pas évidente (cf l’article de warton et al). ici : https://besjournals.onlinelibrary.wiley.com/doi/pdf/10.1111/2041-210X.12552
+
+Ainsi pour la suite, nous allons nous intéresser aux modèles linéaires généralisés.
+
+
+
+
+
+
+## Modélisation par la loi de Poisson
+
+
+### Création d'une fonction 
+
+Pour la loi de poisson, on utilise le jeu de données normalisées. 
+
+Nous allons créer une fonction qui estime le paramètre $\lambda$ par la méthode des moments. On procéde de la façon suivante:
+- estimation de $\lambda$ par la moyenne de chaque gène
+- estimation des probabilités théorique en appliquant la fonction dpois avec pour valeur de lambda l'estimation précédemment faite 
+- calcul de la vraisemblance par la somme des log de proba
+
+Cette fonction retourne les élements suivants dans un dataframe:
+- lambda = la moyenne estimée de chaque gène
+- logL_poiss = le log vraisemblance de chaque modèle
+
+ 
+
+```{r}
+poisson_fch = function(data_norm){ 
+  
+  poiss = t(apply(data_norm, 2, function(c) {
+    #estimation de lambda par la moyenne de chaque gène
+    lambda = mean(c)
+    #calcul des proba pour chaque gène
+    proba = dpois(c, lambda)
+    #L = prod(proba)
+    #calcul de la vraisemblance
+    logL = sum(log(proba))
+    return(c(lambda_poiss = lambda, logL_poiss = logL))
+  }))
+  return(data.frame(poiss))
+}
+
+```
+
+
+### Modèlisation de poisson à l'aide de la fonction glm
+
+La modélisation de Poisson peut être également réalisée à l'aide de la fonction glm.
+Cette fonction n'utilise pas la méthode des moments mais la méthode du maximum de vraisemblance. 
+Nous avons fait une seconde modélisation sur nos données à l'aide de cette fonction afin d'en comparer les résultats.
+Celle-ci nous permet également de faire une modélisation en prenant en compte les tissus, ce qui nous permet de voir si ceux-ci ont une influence. 
+
+La procédure utilisée est la suivante:
+- modélisation par la fonction glm, avec la paramètre famille en poisson pour un modèle nul
+- la fonction estime lambda
+- simulation aléatoire des données selon une loi de poisson à l'aide de la fonction rpois avec pour paramètres n = nombre d'observations du jeu de données et lambda = lambda estimé précédemment 
+- calcul de la proportion de zéro obtenu par cette simulation. Ce résulat va nous permettre de faire une estimation sur la capacité du modèle à estimer la proportion de zéros.
+- seconde modélisation par la fonction glm, loi de poisson en ajoutant les tissus comme variable explicative
+- calcul du rapport de vraisemblance du modèle nul et du modèle avec les tissus
+
+
+La fonction retourne un dataframe avec les éléments suivants : 
+- lambda = lambda estimé par le modèle nul 
+- aic_null = AIC du modèle nul
+- aic_tissue = AIC du modèle avec les tissus
+- R2
+- pvaleur = la pvaleur du test du rapport de vraisemblance
+- prop_zero = prooportion de zero dans le jeu de données
+- prop_predit = proportion de zéro obtenue par simulation 
+
+
+```{r}
+poisson_glm_tissue = function(data, tissue){
+  poisson_tisse = t(apply(data, 2, function(c){
+    #copie de c dans y
+    y = c
+    # application du modele nul
+    model = glm(y ~ 1, family = "poisson", maxit = 100) 
+    #lambda estimé par le modele = la moyenne 
+    Lambda = exp(model$coefficients)
+    
+    #simulation de poisson à l'aide des paramètres
+    set.seed(1997)
+    simul_null = rpois(length(y), Lambda)
+    
+    #proportion de zéro:
+    prop_predicte = mean((simul_null==0)+0) #zero predit par le modele
+    prop_true = mean((y==0)+ 0) #zero reel dans le jeu de données
+    
+    # modèle tenant compte des tissus
+    model_tissue = glm(y ~ tissue, family="poisson",maxit = 100)  
+    
+    #AIC modele nul et modele avec tissus
+    aic_null = model$aic 
+    aic_tissue =model_tissue$aic 
+    
+    #test du rapport de vraisemblance
+    #chi2M = le rapport de vraisemblance  
+    chi2M = model_tissue$null.deviance - model_tissue$deviance 
+    # dl =  le degré de liberté qui est 1 ici
+    dl = model_tissue$df.null -model_tissue$df.residual 
+    # pvaleur du test de khi 2
+    pvaleur = pchisq(chi2M,dl,lower.tail = F) 
+    
+    # calcul du pseudo R
+    pseudoR2 = (model_tissue$null.deviance- model_tissue$deviance)/model_tissue$null.deviance
+    return(c(Lambda = round(Lambda, 4), aic_null = aic_null, aic_tissue = aic_tissue, pseudoR2,  pvalu = pvaleur, prop_true, prop_predicte))
+  }))
+  
+ poisson_tisse = data.frame(poisson_tisse)
+  colnames(poisson_tisse) = c("Lambda", "aic_null", "aic_tissue", "pseudoR2", "pvaleur", "prop_true", "prop_predicte")
+  return(data.frame(poisson_tisse))
+}
+```
+
+### Résultats de la modélisation de poisson 
+
+* Résultats de la modélisation sur les gènes *OLFA* par la méthode des moments:  
+
+```{r}
+#application de la fonction methode moments sur les gènes olfa
+poiss = poisson_fch(data_norm)
+
+kable(poiss[6:10,], format = "html", digits = 3, caption = "Modelisation de la loi de poisson sur les genes olfa MM")%>%
+  kable_styling(full_width = F)
+```
+
+* Résultats de la modélisation par le maximum de vraisemblance (fonction glm) pour le modèle nul et avec tissu
+
+```{r}
+poiss_g_tisssue = poisson_glm_tissue(data_norm,tissue_olfa)
+
+kable(poiss_g_tisssue[6:10,], format = "html", digits = 3, caption = "Modelisation de la loi de poisson sur les genes olfa MLE")%>%
+  kable_styling(full_width = F)
+```
+
+
+Le paramètre de poisson $\lambda$  estimé par la méthode des moments et du maximum de vraisemblance, package qui se base sur les algorithmes Fisher scoring de glm sont exactement les mêmes. 
+
+
+## Loi de poisson sur les 4 classes de gènes
+
+Comparaison graphique de la modélisation de poisson sur les quatre type de gènes:
+
+```{r, fig.show='hold', out.width="50%", fig.cap="Modelisation de la loi de Poisson"}
+
+c1 = data_norm[,"OR2G3"]
+c2 = data_norm[,"OR2W3"]
+c3 = data_norm[,"ADCY3"]
+c4 = data_norm[,"CAMK2A"]
+
+Lambda1 =  poiss_g_tisssue["OR2G3",]$Lambda
+Lambda2 =  poiss_g_tisssue["OR2W3",]$Lambda
+Lambda3 =  poiss_g_tisssue["ADCY3",]$Lambda
+Lambda4 =  poiss_g_tisssue["CAMK2A",]$Lambda
+
+#layout(matrix(1:4,2 ), respect=TRUE)
+plot(density(c1), main = "OR2G3", xlim = c(0,5), las = 1)
+x = min(c1):max(c1)
+lines(x, dpois(x, Lambda1), col = "red", lty = 2)
+legend("topright", c("Observation", "modele"), lty = 1:1, col = c("black", "red"), box.lty = 0)
+
+plot(density(c2), main="OR2W3",xlim = c(0,400), las = 1)
+x = min(c2):max(c2)
+lines(x, dpois(x, Lambda2), col="red", lty = 2)
+legend("topright", c("Observation", "modele"), lty = 1:1, col = c("black", "red"), box.lty = 0)
+
+plot(density(c3), main="ADCY3",xlim = c(0,5000), las = 1)
+x = min(c3):max(c3)
+lines(x, dpois(x, Lambda3), col="red", lty = 2)
+legend("topright", c("Observation", "modele"), lty = 1:1, col = c("black", "red"), box.lty = 0)
+
+plot(density(c4), main="CAMK2A",xlim = c(0,5000), las = 1)
+x = min(c4):max(c4)
+lines(x, dpois(x, Lambda4), col = "red", lty = 2)
+legend("topright", c("Observation", "modele"), lty = 1:1, col = c("black", "red"), box.lty = 0)
+```
+
+Graphiquement, on peut voir que la loi de poisson n'est pas adaptée pour ces gènes. 
+
+Dans notre approche, nous nous basons sur des représentations graphiques mais il faudrait faire un test d'ajustement du Khi-deux afin de conclure sur l'adéquation de ce modèle à nos données. 
+
+
+Voici les résultats chiffrés des deux méthodes sur nos quatre gènes
+
+```{r}
+res <- poiss[c("OR2G3", "OR2W3", "ADCY3", "CAMK2A"), ]
+
+
+kable(res, format = "html", digits = 3, caption = "Resultats de la loi de poisson sur les quatre genes MM")%>%
+  kable_styling(full_width = F)
+```
+
+
+
+```{r}
+res <- poiss_g_tisssue[c("OR2G3", "OR2W3", "ADCY3", "CAMK2A"), ]
+
+
+kable(res, format = "html", digits = 3, caption = "Resultats de la loi de poisson sur les quatre genes MLE")%>%
+  kable_styling(full_width = F)
+```
+
+#### Influence du tissu
+
+```{r}
+bonf_pval = 0.05/ncol(data_raw_all)
+signif_1 <- round(sum(poiss_g_tisssue$pvaleur<bonf_pval)/384, 2)*100
+
+```
+
+En ce qui concerne l'influence des tissus, le modèle de poisson détecte de façon significative l'influence du tissu pour `r signif_1` (99%) des gènes *OLFA*  à un seuil  de Bonferroni 2.10-06.
+
+
+
+## Comparaison de cette influence sur les gènes pris au hasard 
+
+```{r}
+poiss_g_rnd = poisson_glm_tissue(data_norm_rnd,tissue_rnd)
+signif <- round(sum(poiss_g_rnd$pvaleur<bonf_pval)/384, 2)*100
+```
+
+
+Le modèle de poisson détecte de façon très significative l’influence du tissu pour 99% les gènes olfa à un seuil de Bonferroni 2.10-06. Pour 384 gènes pris au hasard ce test est signifative pour `r signif`   97% des gènes.
+
+
+Malgré que le modèle de poisson arrive à  détecter l'infuence du tissue, les vraisemblances ou les AIC obtenus sont très grands voir infini réduisant ainsi la vraisemblance du modèle. 
+
+
+
+## Modélisation par la loi Négative binomiale 
+
+
+Une autre loi qui peut être utilisée est la négative binomiale.
+Nous allons procéder à la modélisation de celle-ci sur nos données normalisées. 
+
+
+### Négative binomiale programmation de fonction 
+
+Le modèle négative binomiale est adapté lorsqu'il y a une surdispersion, c'est à dire quand la variance est  plus grande que la moyenne.
+
+Pour les gènes où il n' y a pas de surpdispersion, la modélisation par la loi Négative Binomiale n'est pas possible et il sera donc appliqué un modèle de poisson ordinaire. 
+
+Dans notre notre approche , nous avons réalisé une première fonction dont les calculs sont basés sur la méthode des moments afin d'estimer les paramètres suivants: $\lambda$  et $\sigma$ le paramètre de dispersion.
+ 
+
+
+
+```{r}
+# calcul de la proba
+proba_nb = function(x, lambda, alpha){
+  # si le paramètre de dispersion est nul alors on considère une loi de poisson
+  if(alpha == 0){
+    return(dpois(x, lambda)) 
+  }
+  else{
+    # si la dispersion existe alors le  size est son inverse
+    return(dnbinom(x = x, size = 1/alpha, mu = lambda)) 
+  }
+}
+
+# fonction qui calcule les éléments de la binomiale négative
+negbinomiale = function(data_norm){
+  nb = t(apply(data_norm, 2, function(c){
+    lambda = mean(c)
+    y = c
+    # proportion de zero dans le jeu de données
+    prop_true = mean((y==0)+ 0)  
+    # estimation de la variance
+    s2 = var(c)
+    # on garde par défaut la loi de poisson s'il n'y a pas de surdispersion
+    #si la variance est plus petite que moyenne alors la dispersion peut être considérée nulle
+    if(s2<lambda){  
+      alpha = 0
+      set.seed(1997)
+      simul_null = rpois(length(y), lambda)
+      prop_predicte = mean((simul_null==0)+0)
+    }
+    else{
+      alpha = (s2-lambda)/lambda^2
+      
+      set.seed(1997)
+      simul_null = rnbinom(length(y), size = 1/alpha,mu = lambda)
+      prop_predicte = mean((simul_null==0)+0)
+    }
+    proba = proba_nb(x=c,lambda = lambda,alpha = alpha)
+   # L = prod(proba)
+   # logL = sum(log(proba))
+    return(c(lambda_nb = lambda, alpha_nb = alpha, prop_true, prop_predicte))
+  }))
+  
+  
+  nb = data.frame(nb)
+  colnames(nb) = c("Lambda", "Alpha", "prop_true", "prop_predicte")
+  return(nb)
+}
+
+```
+
+Une seconde fonction est créé en se basant cette fois sur la fonction glm.nb de R qui estime les paramètres à l'aide de la méthode du maximum de vraisemblance, elle se base sur l'algorithme Fisher scoring.  Une comparaison du modèle nul et du modèle qui prend en compte les tissus est également effectué à l'aide de cette fonction.
+
+On procède de la façon suivante:
+- calcul de la proportion de zéro pour chaque gène
+- modélisation par une loi négative binomiale si les données sont surdispersées sinon application du modèle de poisson 
+- Pour chacun des cas:
+- estimation de $\lambda$ par le modèle nul. estimation d'alpha pour la négative binomiale, définit à nul pour poisson
+- modèlisation avec les tissus
+- simulation des données selon la loi négative binomiale --> #TO DO: Kodjo simulation poisson si poisson? 
+- estimation de la proportion de zéro obtenu par cette simulation
+- calcul le rapport de vraisemblance
+
+Cette fonction renvoit un dataframe : 
+- Lambda = Lambda estimé par le modèle nul
+- Alpha = alpha estimé par le modèle
+- aic_null = aic du modèle nul
+- aic_tissue = aic du modèle avec tissu
+- pvaleur = pvaleur du test de rapport de vraisemblance
+- prop_true = proportion de zéro du jeu de données
+- prop_predict = proportion de zéro prédit
+
+
+```{r}
+# pour le modèle nb nous avons utilisé un mélange poisson gamma et supposé que c'est une loi de poisson au cas où alpha est nul.
+
+library(MASS)
+nb_glm_tissue = function(data, tissue){
+  nb_tisse= t(apply(data, 2, function(c){
+      y = c
+      # proportion de zero dans nos données  
+      prop_true = mean((y==0)+ 0)
+       # modèle nul 
+      model = try(glm.nb(y~1,maxit = 100),TRUE)
+      # modèle tenant compte des tissus 
+      model_tissue = try(glm.nb(y ~ tissue,maxit = 100),TRUE )
+      
+      # s'il n'y a pas de message d'erreur dans le modèle alors on appplique la neg binomial
+     if(!inherits(model, "try-error") & !inherits(model_tissue, "try-error")){ 
+        Lambda= exp(model$coefficients) # c'est la moyenne ou bien le paramètre de la loi négative binomial
+        Alpha = 1/model$theta
+      
+        set.seed(1997)
+        simul_null = rnbinom(length(y),size=model$theta,mu = Lambda)
+        prop_predict = mean((simul_null==0)+0)
+        aic_null = model$aic # l'aic 
+        aic_tissue = model_tissue$aic
+        
+        
+        chi2M = 2*(logLik(model_tissue) - logLik(model))  # le rapport de vraisemblance 
+        dl = model$df.residual - model_tissue$df.residual# le degré de liberté
+        pvaleur = pchisq(chi2M,dl,lower.tail = F) # pvaleur du test de khi 2
+        
+     }
+      #sinon nous faisons un modèle de poisson et le paramètre de dispersion est supposé nul 
+    else{ 
+        # modèle nul
+        model = glm(y ~ 1,family = "poisson", maxit = 100)  
+        # Lambda = la moyenne = le paramètre de la loi de poisson
+        Lambda = exp(model$coefficients) 
+    
+        #simulation 
+        set.seed(1997)
+        simul_null = rpois(length(y), Lambda)
+        prop_predict = mean((simul_null==0)+0)
+    
+        aic_null = model$aic # l'aic 
+        model_tissue = glm(y ~ tissue, family="poisson", maxit = 100) # modèle tenant compte des tissus 
+        aic_tissue = model_tissue$aic 
+        chi2M = model_tissue$null.deviance - model_tissue$deviance # le rapport de vraosemblance 
+        dl = model_tissue$df.null -model_tissue$df.residual # le degré de liberté qui est 1 ici
+        pvaleur = pchisq(chi2M,dl,lower.tail = F) # pvaleur du test de khi 2
+        Alpha = 0 
+      }
+   
+    return(c(Lambda = round(Lambda, 4), Alpha = Alpha, aic_null = aic_null, aic_tissue = aic_tissue,  pvaleur = pvaleur, prop_true, prop_predict))
+  }))
+  
+
+  nb_tisse = data.frame(nb_tisse)
+  colnames(nb_tisse) = c("Lambda", "Alpha", "aic_null", "aic_tissue", "pvaleur", "prop_true", "prop_predicte")
+  return(data.frame(nb_tisse))
+}
+```
+
+
+
+
+### Comparaison des deux méthodes
+
+* Estimations faites par la méthode des moments:
+
+Voici les premiers résultats des estimations:
+
+```{r}
+# résultats avec la négative binomiale
+nb_norm = negbinomiale(data_norm)
+
+kable(head(nb_norm), format = "html", digits = 3, caption = "Modelisation de la loi NB sur les genes olfa MM")%>%
+  kable_styling(full_width = F)
+```
+
+
+* Estimations faites par la méthode du maximum de vraisemblance (fonction glm):
+
+```{r}
+# résultat de la négative binomiale  glm.nb
+nb_olfa_glm = nb_glm_tissue(data_norm, tissue_olfa)
+# visualisation premiers résultats
+
+kable(head(nb_olfa_glm), format = "html", digits = 3, caption = "Modelisation de la loi NB sur les genes olfa MLE")%>%
+  kable_styling(full_width = F)
+```
+
+
+En comparant les deux résultas, nous voyons que le $\lambda$ estimé est le même et reste égal à celui estimé par la loi de poisson.
+
+Cependant, le paramètre de dispersion varie ce qui remet en cause l'estimation par la méthode des moments d'autant plus que les estimations faites par les modèles linéaires généralisés sont asymptotiquement sans biais et consistants *ahrmeir and Kaufmann [1985]* et *Antoniadis et al. [1992]*
+
+
+### Modélisation NB sur les 4 classes de gènes
+
+```{r, fig.show='hold', out.width="50%", fig.cap="Modelisation de la loi NB"}
+c1 = data_norm[,"OR2G3"]
+c2 = data_norm[,"OR2W3"]
+c3 = data_norm[,"ADCY3"]
+c4 = data_norm[,"CAMK2A"]
+
+Lambda1 =  nb_olfa_glm["OR2G3",]$Lambda
+Lambda2 =  nb_olfa_glm["OR2W3",]$Lambda
+Lambda3 =  nb_olfa_glm["ADCY3",]$Lambda
+Lambda4 =  nb_olfa_glm["CAMK2A",]$Lambda
+
+Alpha1 = nb_olfa_glm["OR2G3",]$Alpha
+Alpha2 = nb_olfa_glm["OR2W3",]$Alpha
+Alpha3 = nb_olfa_glm["ADCY3",]$Alpha
+Alpha4 = nb_olfa_glm["CAMK2A",]$Alpha
+  
+#layout(matrix(1:4,2 ), respect=TRUE)
+
+plot(density(c1), main = "OR2G3", xlim = c(0,5), las = 1)
+x = min(c1):max(c1)
+lines(x, dnbinom(x, size = 1/Alpha1, mu = Lambda1 ), col="red", lty=2)
+legend("topright", c("Observation", "modele"), lty = 1:1, col = c("black", "red"), box.lty = 0)
+
+plot(density(c2), main = "OR2W3", xlim = c(0,400), las = 1)
+x = min(c2):max(c2)
+lines(x, dnbinom(x, size = 1/Alpha2, mu = Lambda2 ), col="red", lty=2)
+legend("topright", c("Observation", "modele"), lty = 1:1, col = c("black", "red"), box.lty = 0)
+
+plot(density(c3), main = "ADCY3", xlim = c(0,5000), las = 1)
+x = min(c3):max(c3)
+lines(x, dnbinom(x, size = 1/Alpha3, mu = Lambda3 ), col="red", lty=2)
+legend("topright", c("Observation", "modele"), lty = 1:1, col = c("black", "red"), box.lty = 0)
+
+plot(density(c4), main = "CAMK2A", xlim = c(0,5000), las = 1)
+x = min(c4):max(c4)
+lines(x, dnbinom(x, size = 1/Alpha4, mu = Lambda4 ), col="red", lty=2)
+legend("topright", c("Observation", "modele"), lty = 1:1, col = c("black", "red"), box.lty = 0)
+
+```
+
+
+D'après ces graphiques, on peut voir que la loi négative binomiale s'ajuste mieux à nos données que la loi de poisson.
+Pour le gène *OR2G3*, visuelement on voit que le modèle a du mal à s'ajuster sur le pic en zéro. 
+
+On voit donc que la modélisation par la loi Négative Binomiale est meilleure pour les gènes qui n'ont pas ou peu de zéros. Visuelement entre ces quatre gènes, il semble que la modélisation soit la meilleure pour le gène *ADCY3*. Ce qui peut être surprenant du fait que ce gène est de la famille des gènes peu dispersés.
+
+```{r}
+#application de la fonction de modelisation de la loi normale sur nos données olfa
+
+res <- nb_olfa_glm[c("OR2G3", "OR2W3", "ADCY3", "CAMK2A"), ]
+
+
+kable(res, format = "html", digits = 3, caption = "Resultats de la modelisation NB sur les 4 classes genes MLE")%>%
+  kable_styling(full_width = F)
+```
+
+### Influence du tissu
+
+ Si on s'intéresse aux paramètres estimés par le modèle. On peut voir que cette loi a une bonne capacité de modélisation pour la proportion de zéro. Pour le gène *OR2G3*, qui est très riche en zéro, le modèle estime 94,7% de zéros pour une proportion réelle de 94%. 
+ 
+
+```{r}
+signif_2 <- round(sum(nb_olfa_glm$pvaleur<bonf_pval)/384, 2)*100
+```
+
+La modélisation par une loi binomiale négative détecte l'effet de tissu pour `r signif_2` % des gènes avec le même seuil que celui fixé pour le modèle poisson.
+
+
+```{r}
+#* ajout du cas des gènes pris au hasard 
+nb_g_data_rnd = nb_glm_tissue(data_norm_rnd, tissue_rnd)
+signif <- round(sum(nb_g_data_rnd$pvaleur < bonf_pval)/384, 2)*100
+```
+
+Pour les 384 gènes pris au hasard, on obtient `r signif` % de significatifs pour le modèle négative binomiale.
+
+La particularité des gènes *OLFA* est qu'ils s'expriment dans peu de tissus. Ainsi, pour mettre en évidence cette expression différentielle, nous considérons des modèles dits à gonflement de zéro  proposés par Mullahy (1986) . 
+
+
+
+## Modélisation par une loi Zéro Inflated de Poisson
+
+Interessons nous maintenant à une modélisation par un modèle zéro inflated qui semble pouvoir être adéquat pour les gènes qui présentent beaucoup de zéro.
+
+Comme pour la négative binomiale, nous faisons les estimations des paramètres  du zip par la méthode des moments en créant notre propre fonction pour un modèle nul. Puis nous ferons une seconde estimation grâce à la fonction zeroinfl du package pscl enrichit du modèle avec les tissus.
+
+
+### Modèle zip fonction créé par la méthode des moments 
+
+
+```{r}
+# fonction qui calcul le parametre pi = la propa  de zéro pour zip -> methode des moments
+prob_zero_corri = function(c){
+  m =  mean(c)
+  s = sd(c)
+  #si les données ne sont pas surdispersees = m>s^2 => on ne peut pas appliquer le modèle, on retourne zero
+  if(m > (s^2) ){  
+    return(0)
+  }
+  else{
+    #sinon on calcul pi
+    return((s^2 - m)/(s^2 + m^2 -m))
+  }
+}
+
+# fonction qui calcule lambda zip -> methode des moments
+lambda_corri = function(c){
+ m = mean(c)
+ s = sd(c)
+ #si jamais la moyenne des gènes est zéro -> tous les echantillons a zero
+ if(m==0){ 
+   return(0)
+ }
+ else{
+   return(((s^2 + m^2)/m)-1)
+ }
+}
+
+#creation de la fonction zip
+calcul_proba = function(c, pi, lambda){
+  sapply(c,function(x){
+    # la proba si calcule avec deux composantes : une pour obserations nulles et l'autres pour les non nulles
+    
+    if(x==0){
+      return(pi + (1-pi)*exp(-lambda))
+    }
+    
+    else{
+      return((1-pi)*(lambda^x)*exp(-lambda)/factorial(x))
+    }
+  })
+}
+
+
+
+# la fonction zip elle même 
+zip2 = function(data_norm){
+  
+  zip=t(apply(data_norm,2,function(c){
+    
+    y=c
+    #calcul de la proportion de zero dans nos donnees
+    prop_true = mean((y==0)+ 0)  
+    
+    # estimation du paramètre lambda de loi de poisson 
+    lambda = lambda_corri(c)
+    
+    
+    # estimation de pi (parametre de benouilli) fonction prob_zero_corri 
+    pi = prob_zero_corri(c)
+    
+    #Partie qui porte sur la capacité à "predire" les zeros:
+    # 1. si la proba d'être 0 est nulle alors on ne peut pas utiliser un zip et dans ce cas , nous fixons la proportion de 0 à 0
+    if(pi==0){
+      
+      prop_predicte = 0
+    }
+    else{
+      
+      # 2.sinon nous faisons une simulation de zip comme suit : 
+      # nous faisons une  simulation d'une loi de bernoulli avec une proba de succès p
+      # si la réalisation est un succès ie vaut 1 , nous la transformons à zéro
+      # sinon nous la remplaçons par une réalisation de poisson 
+      set.seed(1997)
+      simul_null = ifelse(rbinom(length(y), 1, pi)>0, 0, rpois(length(y), lambda = lambda))
+       prop_predicte  = mean((simul_null == 0)+0)
+    }
+   
+     
+    proba = calcul_proba(c=c, pi=pi, lambda = lambda)
+    L=prod(proba)   
+    logL=sum(log(proba)) 
+    
+    # les éléments retournés par le programmes sont la pi , lambda et vrai proportion de zéro et la 
+    # proportion de zéro suggérer par les paramètres  estimés
+    
+    return(c( pi_zip = pi,lambda_zip=lambda, prop_true = prop_true, prop_predicte = prop_predicte))
+  })
+    
+  )
+  return(data.frame(zip))
+}
+
+```
+
+
+### Fonction  à l'aide de la fonction du package pscl
+
+```{r}
+# la fonction zip : regression zip avec le package pscl
+# nous faisons un modèle où nous avons supposé que il y ' a une inflation zéro mais pour
+# l'instant nous justifions juste l'inflation par l'intercept , pour une comparaison aisée avec le modèle de poisson.
+#  cette configuration suggère alors que toute observation à  50% d'être zéro ou non 
+library(pscl)
+zip_pscl_tissue = function(data,tissue){
+  bernou_tisse= t(apply(data,2,function(c){
+    y=c
+    # proportion de zero dans le jeu de données
+    prop_true = mean((y==0)+ 0) 
+    # on essaie d'appliquer le modèle, car pour certains gènes ca peut ne pas fonctionner
+    model = try(zeroinfl(y ~ 1,dist = "poisson",link = "logit"),TRUE) 
+    
+    # on essaie d'appliquer aussi ce modèle avec tissus
+    model_tissue = try(zeroinfl(y ~ tissue | 1 , dist = "poisson", link="logit"),TRUE)
+    #test
+    #model_tissue = try(zeroinfl(y ~ 1 | tissue , dist = "poisson", link="logit"),TRUE)
+    
+    # resultats des essais:
+    # s'il n'y a pas de message d'erreur dans le modèle
+    if(!inherits(model, "try-error") & !inherits(model_tissue, "try-error")){ 
+      mu = exp(model$coefficients$zero)
+      # pi = la proba de zéro structurels ie la partie bernoulli
+      pi = mu/(1+mu) 
+      # la partie de poisson 
+      Lambda= exp(model$coefficients$count) 
+      
+      
+      
+      # simulation 
+      set.seed(1997)
+      #on simule zip si  
+      # en effet si la réalisation de bernoulli est 1 il met 0 sinon il fait une poisson
+      simul_null = ifelse(rbinom(length(y),1,pi)>0,0,rpois(length(y), lambda = Lambda)) 
+      # calcul proportion de zero estimé
+      prop_predicte = mean((simul_null==0)+0)
+      
+      #calcul des AIC
+      AIC = AIC(model )
+      AIC_tissue = AIC(model_tissue)
+      
+      # la fonction zeroinfl  retourne  le loglik et non l'aic comme glm 
+      log_null = model$loglik 
+      log_tissue = model_tissue$loglik 
+      # le rapport de vraisemblance 
+      LR = 2*(log_tissue-log_null) 
+      dl = model$df.residual- model_tissue$df.residual
+       # pvaleur du test de khi-2 pour voir l'effet du tissu sur la masse de zéro obtenu
+      pvalu = pchisq(LR,df= dl , lower.tail = FALSE)
+    } 
+    else{
+      # pour les gènes qui ne peuvent pas êtres modélisés par un zip , nous avons fixé tous les paramètres à zero.
+      pi= 0
+      Lambda=0
+      log_null = 0
+      log_tissue = 0 
+      pvalu = 0
+      AIC = 0
+      AIC_tissue = 0
+      prop_predicte = 0
+    }
+
+    return(c(pi = round(pi,4), Lambda = round(Lambda, 4), AIC = AIC, AIC_tissue = AIC_tissue, pvaleur=pvalu, prop_true = prop_true, prop_predicte = prop_predicte ))
+  }))
+  bernou_tisse = data.frame(bernou_tisse)
+  colnames(bernou_tisse) = c("pi", "Lambda", "AIC", "AIC_tissue", "pvaleur", "prop_true ", "prop_predicte")
+  return(bernou_tisse)
+}
+```
+
+
+
+### Résultats zip
+
+Estimations par la méthode des moments sur les gènes olfa: 
+
+```{r}
+zip_olfa = zip2(data_norm) 
+kable(head(zip_olfa), format = "html", digits = 3, caption = "Modelisation de la loi zip sur les genes olfa MM")%>%
+  kable_styling(full_width = F)
+
+```
+
+Estimation par la méthode du maximum de vraisemblance (fonction pscl)
+
+```{r}
+# avec la  regression zip 
+zip_pscl_olfa = zip_pscl_tissue(data_norm, tissue_olfa) 
+kable(head(zip_pscl_olfa), format = "html", digits = 3, caption = "Modelisation de la loi zip sur les genes olfa MLE")%>%
+  kable_styling(full_width = F)
+```
+
+
+Pour le modèle nul (sans variable) nous constatons que les estimations faites avec la méthode des moments sont significativement très différentes de celles données par la fonction *zeroinf* du package *pscl*.
+
+
+Graphiquement, nous représentons la proportion de zéro réel du jeu de données en fonction du paramètre pi estimé par le modèle. Le premier graphique est celui de l'estimation de pi donné par la fonction que nous avons programmé basée sur la méthode des moments. Le second affiche les résultats donnés par la fonction *zeroinfl* du package pscl. 
+
+
+
+
+```{r, fig.show='hold', out.width="50%", fig.cap="Comparaison zip MOM vs MLE"}
+
+#layout(matrix(1:2,1),respect = T)
+plot(zip_olfa$prop_true,zip_olfa$pi_zip,
+     main= "Proportion zero p vs parametre pi",
+     cex.main = 0.7,
+     ylab = expression(pi_zip2),
+     xlab = expression(p))
+abline(a=0,b=1,col=2)
+
+plot(zip_pscl_olfa$`prop_true `,zip_pscl_olfa$pi,
+     main="Proportion zero p vs parametre pi pscl",
+     cex.main = 0.7,
+     ylab = expression(pi_zeroinfl),
+     xlab = expression(p))
+abline(a=0,b=1,col=2)
+```
+
+
+Sur le premier graphique, on observe que l'ensemble des points est très éloigné de la première bissectrice. Le modèle surestime le nombre de zéro par rapport au nombre réél.
+
+Sur le second graphique, on peut voir que les points sont sur la première bissectrice ainsi le modèle fournit un bon ajustement du nombre de zéro.  
+
+
+Les travaux d'ahrmeir and Kaufmann [1985] et Antoniadis et al. [1992] prouvent que les estimations faites pour les modèles linéaires généralisés sont asymptotiquement sans biais et consistants. Ceux-ci utilisent une estimatin par le maximum de vraisemblance et non par la méthode des moments. C'est pourquoi nous allons exploiter les résultats donnés par la fonction *zeroinfl* qui se base sur ces modèles.
+
+
+
+# Modélisation ZIP sur les 4 classes de genes
+
+```{r, fig.show='hold', out.width="50%", fig.cap="Modelisation de la loi ZIP"}
+c1 = data_norm[,"OR2G3"]
+c2 = data_norm[,"OR2W3"]
+c3 = data_norm[,"ADCY3"]
+c4 = data_norm[,"CAMK2A"]
+
+Lambda1 =  zip_pscl_olfa["OR2G3",]$Lambda
+Lambda2 =  zip_pscl_olfa["OR2W3",]$Lambda
+Lambda3 =  zip_pscl_olfa["ADCY3",]$Lambda
+Lambda4 =  zip_pscl_olfa["CAMK2A",]$Lambda
+
+pi1 = zip_pscl_olfa["OR2G3",]$pi
+pi2 = zip_pscl_olfa["OR2W3",]$pi
+pi3 = zip_pscl_olfa["ADCY3",]$pi
+pi4 = zip_pscl_olfa["CAMK2A",]$pi
+  
+#layout(matrix(1:4,2 ), respect=TRUE)
+
+plot(density(c1), main="OR2G3",xlim = c(0,5), las = 1)
+# nous simulons les données suivants les données 
+c_s1 = ifelse(rbinom(length(c1), 1, pi1) > 0, 0, rpois(length(c1), lambda = Lambda1))
+lines(density(c_s1)$x, density(c_s1)$y, col = "red", lty = 2)
+legend("topright", c("Observation", "modele"), lty = 1:1, col = c("black", "red"), box.lty = 0)
+
+plot(density(c2), main="OR2W3",xlim = c(0,400), las = 1)
+c_s2 = ifelse(rbinom(length(c1),1,pi2)>0,0,rpois(length(c2), lambda = Lambda2))
+lines(density(c_s2)$x,density(c_s2)$y, col="red", lty=2)
+legend("topright", c("Observation", "modele"), lty = 1:1, col = c("black", "red"), box.lty = 0)
+
+plot(density(c3), main="ADCY3",xlim = c(0,5000), las = 1)
+c_s3 = ifelse(rbinom(length(c3),1,pi3)>0,0,rpois(length(c3), lambda = Lambda3))
+lines(density(c_s3)$x,density(c_s3)$y, col="red", lty=2)
+legend("topright", c("Observation", "modele"), lty = 1:1, col = c("black", "red"), box.lty = 0)
+
+
+plot(density(c4), main="CAMK2A",xlim = c(0,5000), las = 1)
+c_s4 = ifelse(rbinom(length(c1),1,pi4)>0,0,rpois(length(c4), lambda = Lambda4))
+lines(density(c_s4)$x,density(c_s4)$y, col="red", lty=2)
+legend("topright", c("Observation", "modele"), lty = 1:1, col = c("black", "red"), box.lty = 0)
+
+```
+
+
+D'après les graphiques ci dessus, on peut voir que le modèle ZIP est bien adapté pour le gène *OR2G3* qui est riche en zéro. Comme on peut le voir sur le graphique, la courbe théorique vient s'ajuster très proche sur le pic en zéro ainsi que sur les petites variations qui suivent.
+
+Par contre, ce modèle ne semble pas adapté pour les trois autres gènes. 
+Pour le gène *OR2W3*, qui présente 15% de zéro et une forte dispersion ensuite, le modèle ZIP semble mal s'adapter. Cela est surement dû à la limite du modèle lorsqu'il y a une forte dispersion. 
+
+
+Remarque: Dans la modélisation, il y a certains gènes sur lesquels on ne peut pas du tout appliquer un zero inflated de poisson car ils sont dépourvus de zéros. Ce sont les 12 gènes identifiés lors de l'analyse descriptive (cf. 2.2). C'est le cas pour le gène *ADCY3* dépourvus de zéro.
+
+Enfin pour le gène *CAMK2A* qui a une très faible proportion de zéro (moins de 1%) et une forte dispersion des données, le modèle ne s'adapte pas.
+
+
+```{r}
+#res des 4 genes  MLE
+
+res <- zip_pscl_olfa[c("OR2G3", "OR2W3", "ADCY3", "CAMK2A"), ]
+
+
+kable(res, format = "html", digits = 3, caption = "Resultats de la modelisation zip sur les 4 genes")%>%
+  kable_styling(full_width = F)
+```
+
+```{r}
+# noms des gènes qui n'ont pas de zéro 
+#rownames(zip_pscl_olfa[ zip_pscl_olfa$pi == 0 & zip_pscl_olfa$Lambda ==0,])
+notzip = rownames(zip_pscl_olfa[ zip_pscl_olfa$pi == 0 & zip_pscl_olfa$Lambda ==0,])
+
+#ces gènes n'ont pas de zéro suite à la vérification 
+#apply(data_norm[,notzip],2,function(c){
+# sum((c==0)+0) 
+#})
+```
+
+
+```{r}
+
+# nous considérons ceux qui ont été modélisés par un zip pour voir la significativité du test
+zip_pscl_olfa_modelise  = zip_pscl_olfa[!rownames(zip_pscl_olfa) %in% notzip,]
+#dim(zip_pscl_olfa_modelise)
+```
+
+```{r}
+s_zip_olfa <- round(sum(zip_pscl_olfa_modelise$pvaleur<bonf_pval)/372, 2)*100
+#> [1] 0.8494624
+```
+
+
+```{r}
+#application du zip sur les genes random
+zip_pscl_rnd = zip_pscl_tissue(data_norm_rnd,tissue_rnd)
+```
+
+```{r}
+#list des genes rnd qui n'ont pas de zero
+notzip_rnd = rownames(zip_pscl_rnd[ zip_pscl_rnd$pi == 0 & zip_pscl_rnd$Lambda ==0,]) # au total 172
+#resultat pour les genes modelises
+zip_pscl_rnd_modelise = zip_pscl_rnd[!rownames(zip_pscl_rnd) %in% notzip_rnd,]
+```
+
+
+```{r}
+#listes des gènes rdn qui n'ont pas de zéro  
+#apply(data_norm_rnd[,notzip_rnd],2,function(c){
+# sum((c==0)+0) 
+#})
+```
+
+```{r}
+s_zip_rdm <- round(sum(zip_pscl_rnd_modelise$pvaleur<bonf_pval)/nrow(zip_pscl_rnd_modelise), 2)*100
+```
+
+Lorsque l'on applique la correction de bonferroni sur les gènes *OLFA* modélisés environ `r s_zip_olfa` % sont significatifs.  
+
+On réalise la même modélisation sur le groupe des 384 gènes que l'on a pris au hasard. 
+Le modèle ZIP est applicable pour 212 de ces gènes. Le test de l’influence des tissus est significatif dans `r s_zip_rdm` % des cas au même seuil. 
+Il serait intéressant de réaliser la modélisation pour l'ensemble des gènes afin de comparer la significativité de l'ensemble mais cela demande trop de ressources pour le calcul.
+
+ 
+
+
+
+
+## Zinb
+
+Nous venons de voir que modèle de zip est bien adapté pour les gènes ayant une forte proportion de zéro, mais pas vraiment lorsqu'il y a une forte disperson.
+
+Ainsi nous considérons le modèle zéro infated negative binomial(zinb) qui ajoute un paramètre de dispersion au modèle zip pour contrôler la surdispersion.
+
+Pour ce modèle, nous avons  utilisé une fonction programmée par le package pscl. 
+
+
+```{r}
+library(pscl)
+
+zinb_pscl_tissue = function(data,tissue){
+  zinb_tisse= t(apply(data,2,function(c){
+    y=c
+    
+    prop_true = mean((y==0)+ 0) # true proportion of zero
+    
+    model = try(zeroinfl(y ~ 1,dist = "negbin",link = "logit", maxit = 100),TRUE)
+    
+    model_tissue = try(zeroinfl(y ~ tissue  |1,dist = "negbin",link="logit", maxit = 100),TRUE) # modèle avec  les tissus
+    
+    if(!inherits(model, "try-error") & !inherits(model_tissue, "try-error")){ # s'il y a pas de message d'erreur dans le modèle
+      mu = exp(model$coefficients$zero)
+      pi= mu/(1+mu) # la proba de zéro structurels ie la partie bernoulli
+      Lambda= exp(model$coefficients$count) # la partie poisson
+      Al = 1/model$theta
+      
+      set.seed(1997)
+      #simulation de données d'une loi zip
+      simul_null = ifelse(rbinom(length(y), 1, pi)>0, 0, rnbinom(length(y), size = 1/Al, mu = Lambda)) 
+      #si la réalisation de bernoulli est 1 on a 0 sinon application d'une loi nb
+      prop_predicte = mean((simul_null==0)+0)
+      
+    
+      AIC = AIC(model )
+      AIC_tissue = AIC(model_tissue)
+      log_null = model$loglik # la fonction zeroinfl  retourne  le loglik et non l'aic comme glm 
+      log_tissue = model_tissue$loglik 
+      dl = model_tissue$df.null -model_tissue$df.residual # le degré de liberté
+      LR = 2*(log_tissue-log_null)  # le rapport de vraisemblance 
+
+      pvaleur = pchisq(LR, df = dl, lower.tail = FALSE) # pvaleur du test de khi-2 pour voir l'effet du tissu sur la masse de zéro obtenu
+    } 
+    else{ #tous les parametres sont fixes à zéro si le gène ne n'est modélisé par un zinb
+      pi= 0
+      Lambda=0
+      AIC = 0
+      AIC_tissue = 0
+      Al=0
+      pvaleur = 0
+      prop_predicte  = 0
+    }
+
+    return(c(pi=pi,Lambda=round(Lambda,4),Alpha = Al,AIC = AIC, AIC_tissue = AIC_tissue ,pvaleur = pvaleur,prop_true,prop_predicte))
+  }))
+  
+  zinb_tisse = data.frame(zinb_tisse)
+  colnames(zinb_tisse) = c("pi", "Lambda", "Alpha", "AIC", "AIC_tissue", "pvaleur", "prop_true","prop_predicte")
+  return(data.frame(zinb_tisse))
+}
+```
+
+
+
+### Zinb pour les gènes olfa 
+
+
+```{r}
+#application de la fonction sur les genes olfa
+zinb_pscl_olfa = zinb_pscl_tissue(data_norm, tissue_olfa)
+kable(head(zinb_pscl_olfa), format = "html", digits = 3, caption = "Modelisation de la loi zibn sur les genes olfa")%>%
+  kable_styling(full_width = F)
+```
+
+
+### Zinb pour les 4 classes de genes
+
+```{r, fig.show='hold', out.width="50%", fig.cap="Modelisation de la loi Zibn"}
+
+c1 = data_norm[,"OR2G3"]
+c2 = data_norm[,"OR2W3"]
+c3 = data_norm[,"ADCY3"]
+c4 = data_norm[,"CAMK2A"]
+
+Lambda1 =  zinb_pscl_olfa["OR2G3",]$Lambda
+Lambda2 =  zinb_pscl_olfa["OR2W3",]$Lambda
+Lambda3 =  zinb_pscl_olfa["ADCY3",]$Lambda
+Lambda4 =  zinb_pscl_olfa["CAMK2A",]$Lambda
+
+pi1 = zinb_pscl_olfa["OR2G3",]$pi
+pi2 = zinb_pscl_olfa["OR2W3",]$pi
+pi3 = zinb_pscl_olfa["ADCY3",]$pi
+pi4 = zinb_pscl_olfa["CAMK2A",]$pi
+
+
+Alpha1 = zinb_pscl_olfa["OR2G3",]$Alpha
+Alpha2 = zinb_pscl_olfa["OR2W3",]$Alpha
+Alpha3 = zinb_pscl_olfa["ADCY3",]$Alpha
+Alpha4 = zinb_pscl_olfa["ADCY3",]$Alpha
+  
+
+#pour tracer les courbes théoriques de la zinb
+#on peut utiliser le package VGAM et la fonction rzinegbin pour effectuer la simulation des données
+# nous simulons les données différemment, on utilise la procèdure suivante:
+# On fait des simulations de la binomiale => on obtient 0 ou 1
+# si on obtient 1, c'est un succès mais pour nous le succès est l'évenement obtenir un zéro donc on note 0 en cas de succès. 
+#si ce n'est pas un succès (on obtient 0) alors on demande une simulation d'une loi negative binomiale
+
+
+#layout(matrix(1:4,2 ), respect=TRUE)
+plot(density(c1), main="OR2G3",xlim = c(0,5), las = 1)
+c_s1 = ifelse(rbinom(length(c1),1,pi1)>0, 0, rnbinom(length(c1), size = 1/Alpha1, mu = Lambda1))
+lines(density(c_s1)$x,density(c_s1)$y,col="red", lty=2)
+legend("topright", c("Observation", "modele"), lty = 1:1, col = c("black", "red"), box.lty = 0)
+
+
+plot(density(c2), main="OR2W3",xlim = c(0,1000), las = 1)
+c_s2 = ifelse(rbinom(length(c2),1,pi2)>0,0,rnbinom(length(c2), size = 1/Alpha2, mu = Lambda2))
+lines(density(c_s2)$x,density(c_s2)$y, col="red", lty=2)
+legend("topright", c("Observation", "modele"), lty = 1:1, col = c("black", "red"), box.lty = 0)
+
+plot(density(c3), main="ADCY3",xlim = c(0,5000), las = 1)
+c_s3 = ifelse(rbinom(length(c3),1,pi3)>0,0,rnbinom(length(c3), size = 1/Alpha3, mu = Lambda3))
+lines(density(c_s3)$x,density(c_s3)$y, col="red", lty=2)
+legend("topright", c("Observation", "modele"), lty = 1:1, col = c("black", "red"), box.lty = 0)
+
+
+plot(density(c4), main="CAMK2A",xlim = c(0,5000), las = 1)
+c_s4 = ifelse(rbinom(length(c1),1,pi4)>0,0,rnbinom(length(c4), size = 1/Alpha4, mu = Lambda4))
+lines(density(c_s4)$x,density(c_s4)$y, col="red", lty=2)
+legend("topright", c("Observation", "modele"), lty = 1:1, col = c("black", "red"), box.lty = 0)
+
+```
+
+
+D'après ces graphiques, on peut voir que le modèle zinb est bien adapté pour le gène *OR2G3* qui est riche en zéro. 
+
+Contrairement au zip qui ne s'adaptait pas très bien au gène *OR2W3* ce modèle semble avoir une meilleure modélisation. 
+
+Ce modèle n’a pas été utilisé sur les gènes *ADCY3* et *CAMPK2A* compte tenu de leur faible proportion de zéro.
+
+Remarque: ce modèle, comme pour le zip ne peut pas être utilisé si les données ne comportent pas de zéros. Aussi, la modélisation ne s'est pas faite sur les 12 gènes dépourvus de zéro.
+
+
+```{r}
+#res des 4 genes  MLE
+
+res <- zinb_pscl_olfa[c("OR2G3", "OR2W3", "ADCY3", "CAMK2A"), ]
+
+
+kable(res, format = "html", digits = 3, caption = "Resultats de la modelisation zinb sur les 4 genes")%>%
+  kable_styling(full_width = F)
+```
+
+
+```{r}
+#genes qui ne sont pas modelisees par le zibn
+length(rownames(zinb_pscl_olfa[ zinb_pscl_olfa$pi == 0 & zinb_pscl_olfa$Lambda ==0,]))
+#> [1] 12
+notzinb = rownames(zinb_pscl_olfa[ zinb_pscl_olfa$pi == 0 & zinb_pscl_olfa$Lambda ==0,])
+```
+
+
+```{r}
+# pour voir la proportion de zéros
+# apply(data_norm[,notzinb],2,function(c){
+#  sum((c==0)+0) 
+# })
+
+# pour voir les max 
+# apply(data_norm[,notzinb],2,function(c){
+#  max(c)
+# })
+```
+
+
+#### Influence des tissus
+
+```{r}
+## pour les gènes olfa modélisé par un zinb
+zinb_pscl_olfa_modelise  = zinb_pscl_olfa[!rownames(zinb_pscl_olfa) %in% notzinb,]
+#dim(zinb_pscl_olfa_modelise)
+s_zinb_olfa <- round(sum(zinb_pscl_olfa_modelise$pvaleur<bonf_pval)/365, 0)*100
+#> [1] 0.775342
+```
+
+Nous appliquons la modélisartion zinb sur le groupe des 384 gènes random. 
+
+```{r}
+# pour voir la proportion de zéros
+# apply(data_norm[,notzinb],2,function(c){
+#  sum((c==0)+0) 
+# })
+```
+
+```{r}
+# apply(data_norm[,notzinb],2,function(c){
+#  max(c)
+# })
+```
+
+```{r}
+#application du modele sur les genes rndm
+zinb_pscl_rnd = zinb_pscl_tissue(data_norm_rnd,tissue_rnd)
+
+length(rownames(zinb_pscl_rnd[ zinb_pscl_rnd$pi == 0 & zinb_pscl_rnd$Lambda ==0,]))
+#> [1] 172
+notzinb_rnd = rownames(zinb_pscl_rnd[ zinb_pscl_rnd$pi == 0 & zinb_pscl_rnd$Lambda ==0,])
+
+```
+
+```{r}
+## pour les gènes olfa modélisé par un zinb
+zinb_pscl_rnd_modelise  = zinb_pscl_rnd[!rownames(zinb_pscl_rnd) %in% notzinb_rnd,]
+#dim(zinb_pscl_rnd_modelise)
+s_zinb_rdm <- round(sum(zinb_pscl_rnd_modelise$pvaleur<bonf_pval)/nrow(zinb_pscl_rnd_modelise), 0)*100
+#> [1] 0.9481132
+
+```
+
+
+POur les gènes *OLFA*, les 12 gènes qui n'ont pas de zéro n'ont pas été modélisés.
+Pour les gènes random, ce sont 172 gènes qui n'ont pas de zéro et ne sont donc pas modélisés. 
+
+Pour les gènes *OLFA*, on obtient `r s_zinb_olfa` % de significativité concernant l'influence du tissu alors que pour les gènes random on obtient `r s_zinb_rdm` %.
+
+
+
+## Bernoulli 
+
+L'objectif de notre projet est de mettre en évidence la particularité des gènes *OLFA* qui sont tissus specifiques. Comme on l'a vu cela s'exprime par une forte proportion de zéro.  
+
+Ainsi après avoir utilisé des modèles classiques, nous utilisons dans cette section une modéliation par une loi de Bernoulli. Nous supposons pour ce modèle, que nous avons un succès si le comptage observé est nul, et un échec sinon. L’intérêt de cette modélisation est qu’elle se passe de toute normalisation.
+
+Pour cette modélisation, on travaille sur les données brutes que l'on modifie de la façon suivante: zéro pour le zéro et un si c'est une autre donnée.
+
+Nous créons une fonction qui nous permet d'estimer le paramètre p par la méthode des moments. 
+
+La démarche est la suivante:
+- estimation du paramètre p par la fréquence de zéro pour chaque gène pour le modèle nul
+- calcul du log-vraisemblance, pour le modèle nul
+- estimation du paramètre p pour chaque gène et chaque tissu
+- calcul du log-vraisemblance pour chaque gène et chaque tissu
+- pour un gène donné, calcul de la somme des log-vraisemblance obtenue pour chaque tissu
+- réalisation du test du rapport de vraisemblance = calcul du ratio du log vraisemblance du modèle nul sur le modele avec tissu.
+
+
+```{r}
+
+# Fonction qui calcule la vraisemblance pour le modèle nul de Bernoulli
+
+loglike_bernoulli = function(p, n) {
+  # la proba est exacetement 0 ou 1 
+  if (p %in% 0:1) {
+    return(0)
+  } else {
+    return(n*(p*log(p) + (1-p)*log(1-p)))
+  }
+}
+
+
+
+# Fonction donnant la proportion de zéro , le logLik du modèle nul et le logLik du modèle avec tissu 
+
+bernoulli_fch2 = function(data_raw, tissue){ 
+    
+  # etape 1: modele nul : calcul de bernouilli pour modele nul que l'on nomme bernou
+    bernou = t(apply(data_raw, 2, function(c) {
+      y = (c==0)+0
+      n = length(y)
+      p = sum(y)/n
+      logL = loglike_bernoulli(p, n)
+    return(c(p=p, logL=logL))
+    }))
+  
+  # on insere les résultats du modèle nul dans un dataframe
+  bernou = data.frame(bernou) 
+  
+  # etape 2 : calcul du modele avec le tissu
+  # on ajoute une colonne LogL_tissue la vraisemblance du modèle avec les tissu
+  bernou$logL_tissue = apply(data_raw, 2, function(c) {
+    # on extrait les tissus , on les ordonne et on  garde leur nom. Pour chaque tissu on calcule le logLik. 
+    # le logLik total sera la somme des loglik par tissue 
+    
+    logL_tissue = sum(sapply(rev(names(sort(table(tissue)))), function(t){
+      # on prend les counts observés pour le tissu nommé t 
+      sub_c = c[tissue==t] 
+      y = (sub_c==0)+0
+      n = length(y)
+      p = sum(y)/n
+      #on calcul la vraisemblance de chaque tissu
+      logL = loglike_bernoulli(p, n)
+      logL 
+    }))
+    
+    return(logL_tissue) 
+    
+  })
+  
+    # ajout d'une colonne a bernou avec le rapport de vraisemblance du modele nul sur le modele avec tissu 
+  bernou$lr = -2 * (bernou$logL - bernou$logL_tissue) 
+  
+    # ajout d'une colonne a bernou avec calcul de pval (en -log10 qu'on nomme pval)
+  bernou$pval = (pchisq(bernou$lr, df=length(unique(tissue))-1, lower.tail=FALSE))
+
+  return(bernou)
+}
+
+```
+
+
+### Bernoulli : estimation par la méthode du maximum de vraisemblance, à l'aide de la fonction glm 
+
+La modélisation de Bernouilli peut être également réalisée à l'aide de la fonction glm qui comme on l'a vu se base sur une estimation par le maximum de vraisemblance. 
+Nous avons voulu faire la comparaison des deux méthodes. 
+
+La procédure est la suivante:
+- modélisation par la fonction glm de famille binomial("logit") pour un modèle nul
+- estimation de pi la proportion de zéros à l'aide des coefficients ( $\mu$ = exp(model$coefficients) et $pi = \frac{\mu}{1+\mu}$)
+- simulation aléatoire des données selon une loi de bernouilli avec les paramètres que l'on a estimé (rbinom: n = nombre d'observations de notre jeu de données, size = 1, et prob = pi(le nombre de zéro estimé par le modèle)
+- calcul de la proportion de zéro obtenu par cette simulation. Cela va nous aider à voir la capacité du modèle à estimer la proportion de zéros.
+- modélisation par la fonction glm de la famille binomial("logit") avec les tissus
+- calcul du rapport de vraisemblance du modèle nul et du modèle avec les tissus
+- calcul le pseudo R 2
+
+
+La fonction retourne un dataframe avec les éléments suivants : 
+- p = proportion de zéro estimé par le modèle nul
+- aic_null = AIC du modèle nul
+- aic_tissue = AIC du modèle avec les tissus
+- R2 = pseudo R2
+- pvaleur = la pvaleur du test du rapport de vraisemblance
+- prop_zero = prooportion de zero dans le jeu de données
+- prop_predit = proportion de zéro obtenue par simulation 
+
+
+```{r}
+
+bernoulli_glm_tissue = function(data,tissue){
+  
+  bernou_tisse= t(apply(data,2,function(c){
+    
+    y = (c==0)+ 0 # codage des observations en 0 ou 1
+    #calcul de la proportion de zero
+    prop_true = mean(y)
+    # le modèle nul avec 100 iteration avoir la convergence
+    model = glm(y ~ 1,family = binomial("logit"),maxit = 100) 
+    # exponentiel du l'intercep estimé
+    mu = exp(model$coefficients) 
+    # l'estimation de p la proportion de zéro par le modele
+    pe = mu/(1+mu) 
+    
+    # simulation de donnees selon une loi bernouilli pour estimer la proportion de zero = +/- une facon de predire les zeros
+    set.seed(1997)
+    # rbinom avec size = 1 => bernouilli et prob = pe = nombre de zero estimé par le modèle => le succès est donc le zéro
+    simul_null = rbinom(length(y), 1, pe)
+    # calcul de la proportion de zéro (qui sont les 1 dans cette simulation)
+    prop_predicte = mean(simul_null)
+    
+    
+    # modelisation avec le tissu 
+    model_tissue = glm(y ~ tissue, family = binomial("logit"), maxit = 100)
+    
+    #AIC des deux modeles
+    # aic_null = aic du modele nul 
+    aic_null = model$aic 
+    #aic_tissue = aic du modele avec les tissus
+    aic_tissue =model_tissue$aic 
+    
+    #test du rapport de vraisemblance:
+    # calcul de la stat de test chi2M 
+    #suit khi2 de dl de nbre param du modèle tissue - nbre param modèle nul
+    chi2M = model_tissue$null.deviance - model_tissue$deviance 
+    dl = model_tissue$df.null - model_tissue$df.residual # le degré de liberté 
+    #calcul de la p_valeur du test
+    pvaleur = pchisq(chi2M,dl,lower.tail = FALSE) 
+
+    
+    # la qualité d'ajustement
+    # un critère qu'on utiliser est le pseudo R2 ou le test d'ajustement : http://hoslem.test
+    
+    pseudoR2 = ifelse(model_tissue$null.deviance == 0, 0 ,(model_tissue$null.deviance- model_tissue$deviance)/model_tissue$null.deviance)
+    
+    return(c(p = round(pe,4),
+             aic_null = aic_null,
+             aic_tissue = aic_tissue,
+             R2 = pseudoR2, 
+             pvalue = pvaleur,
+             prop_true = prop_true,
+             prop_predicte = prop_predicte))
+  }))
+  
+  bernou_tisse = data.frame(bernou_tisse)
+  colnames(bernou_tisse) = c("p", "aic_null", "aic_tissue", "R2", "pvaleur", "prop_true","prop_predicte")
+  return(bernou_tisse)
+}
+```
+
+
+
+
+
+## Résultats du modèle de Bernoulli
+
+Voici les observations des six premières lignes de résultats pour les deux méthodes de bernoulli:
+
+```{r}
+# application de notre fonction sur nos données
+bernou_olfa = bernoulli_fch2(data_raw, tissue_olfa)
+```
+
+```{r}
+# application de la fonction glm sur nos donnees brutes
+bernou_g_olfa = bernoulli_glm_tissue(data_raw, tissue_olfa) 
+```
+
+Resultats pour la méthode des moments:
+
+```{r}
+kable(head(bernou_olfa), format = "html", digits = 3, caption = "Modelisation de la loi bernouilli sur les genes olfa MM")%>%
+  kable_styling(full_width = F)
+```
+
+Résultats pour la méthode du maximum de vraisemblance
+
+```{r}
+ # avec glm
+kable(head(bernou_g_olfa), format = "html", digits = 3, caption = "Modelisation de la loi bernouilli sur les genes olfa MLE")%>%
+  kable_styling(full_width = F)
+```
+
+Les résultats obtenus par la fonction de R et ceux avec notre fonction sont identiques. 
+
+
+### Modélisation Bernouilli sur les 4 classes de gènes
+
+```{r, fig.show='hold', out.width="50%", fig.cap="Modelisation de la loi Zibn"}
+#représentation du modèle de Bernoulli
+
+c1 = data_raw[,"OR2G3"]
+c2 = data_raw[,"OR2W3"]
+c3 = data_raw[,"ADCY3"]
+c4 = data_raw[,"CAMK2A"]
+
+p1 =  bernou_olfa["OR2G3",]$p
+p2 =  bernou_olfa["OR2W3",]$p
+p3 =  bernou_olfa["ADCY3",]$p
+p4 =  bernou_olfa["CAMK2A",]$p
+# 
+#
+#layout(matrix(1:4,2 ), respect=TRUE)
+plot(density( (c1==0)+0), main="OR2G3", las = 1)
+ c_s1 = rbinom(length(c1),1,p1)
+ lines(density(c_s1)$x,density(c_s1)$y,col="red",lty = 2)
+ 
+ plot(density((c2==0)+0), main="OR2W3", las = 1)
+ c_s2 = rbinom(length(c2),1,p2)
+ lines(density(c_s2)$x,density(c_s2)$y,col="red",lty = 2)
+ 
+# 
+ plot(density((c3==0)+0), main="ADCY3", las = 1)
+ c_s3 = rbinom(length(c3),1,p3)
+ lines(density(c_s3)$x,density(c_s3)$y,col="red",lty = 2)
+ 
+ 
+ plot(density((c4==0)+0), main="CAMK2A", las = 1)
+  c_s4 = rbinom(length(c4),1,p4)
+ lines(density(c_s4)$x,density(c_s4)$y,col="red",lty = 2)
+```
+
+
+Sur ces 4 graphiques, nous avons représenté les données brutes transformées en zéro ou un ainsi que la courbe théorique de loi de bernouilli avec les paramètres estimés de chaque gène.
+
+On peut voir qu'avec cette transformation des données, la loi de Bernouilli est bien adaptée pour tous les gènes. 
+
+
+```{r}
+#res des 4 genes  MLE
+
+res <- bernou_g_olfa[c("OR2G3", "OR2W3", "ADCY3", "CAMK2A"), ]
+
+
+kable(res, format = "html", digits = 3, caption = "Resultats de la modelisation bernouilli sur les 4 genes")%>%
+  kable_styling(full_width = F)
+```
+
+## Caractéristique des gènes *OLFA* sous Bernouilli
+
+Afin de savoir si les gènes olfa dégagent une particularité, on modèlise le même nombre de gènes pris au hasard parmis les 22000 avec Bernouilli. 
+
+
+```{r}
+bernou_g_rnd  = bernoulli_glm_tissue(data_raw_rnd, tissue_rnd)
+```
+
+
+```{r}
+bernou_rnd = bernoulli_fch2(data_raw_rnd, tissue_rnd)
+#bernou_rnd$lr = -2 * (bernou_rnd$logL - bernou_rnd$logL_tissue)
+
+# all genes
+
+if (!exists("bernou_all")) bernou_all = bernoulli_fch2(data_raw_all, tissue_all)
+#bernou_all$lr = -2 * (bernou_all$logL - bernou_all$logL_tissue)
+#bernou_all$lpval = -log10(pchisq(bernou_all$lr, df=length(unique(tissue))-1, lower.tail=FALSE))
+```
+
+On ajust la p.valeur en appliquant une correction de Bonferroni 
+
+```{r echo=TRUE, results="verbatim"}
+bonf_pval = 0.05/nrow(bernou_all)
+nrow(bernou_all)
+``` 
+
+```{r}
+sum(-log10(bernou_all$pval)>=5.660941)
+```
+
+```{r}
+#layout(matrix(1:2, 1), respect=TRUE)
+#plot(bernou_all$lr, -log10(bernou_all$pval),ylim = c(0,1000))
+#abline(h=-log10(bonf_pval), lty=2, col="grey")
+#legend("topleft", "critical pval", lty=2, col="grey")
+#x = min(bernou_olfa$lr):max(bernou_olfa$lr)
+#plot(x, dchisq(x=x, df=length(unique(tissue))-1), type="l")
+#abline(v=qchisq(bonf_pval, df=length(unique(tissue))-1, lower.tail=FALSE), col="grey", lty=2)
+#lines(density(bernou_olfa$lr), lty=2, col="red")
+#lines(density(bernou_rnd$lr), lty=2, col="blue")
+#lines(density(bernou_all$lr), lty=2, col="purple")
+#legend("topright", c(paste0("chi^2_", length(unique(tissue))-1, " density"), "LR olfa genes density", "LR random genes density", "LR all genes density", "critical pval"), lty=c(1,1,1,1,2), col=c("black", "red", "blue", "purple", "grey"))
+
+
+
+# si c'est un gène olfa la condition vaut TRUE et TRUE+1  =2 ce qui donnera la couleur rouge
+layout(matrix(1:2, 1), respect=TRUE)
+
+plot(bernou_all$p, -log10(bernou_all$pval), col=adjustcolor(c("grey", "red")[(rownames(bernou_all)%in%rownames(bernou_olfa))+1], alpha.f=0.5), pch=c(1,16)[(rownames(bernou_all)%in%rownames(bernou_olfa))+1])
+abline(h=-log10(bonf_pval), lty=2, col=1)
+legend("topleft", c("olfa genes", "other genes"), pch=c(16,1), col=c("red", "grey")) 
+
+# représentation d'un smoothscatter pour tous les gènes et ensuite les nuages gènes olfa en couleur rouges
+smoothScatter(bernou_all$p, -log10(bernou_all$pval))
+points(bernou_all[colnames(data_raw),]$p, -log10(bernou_all[colnames(data_raw),]$pval), col=adjustcolor(2, alpha.f=0.5))
+abline(h=-log10(bonf_pval), lty=2, col="grey")
+legend("topleft", c("olfa genes"), pch=16, col="red")  
+
+```
+
+On peut voir que la famille des gènes *Olfa* est composée majoritairement par des gènes avec une forte proportion de zéro.
+
+Ces deux graphiques sont particulièrement intéressants. Ils montrent d'une part que les gènes olfa ont une probabilité élevée et qu'ils sont en majorité significatif pour le test. Ainsi le modèle avec le tissu est meilleur que celui sans. La plupart des gènes est certe significatif mais les valeurs de p sont beaucoup plus dispersées.
+
+
+```{r}
+# pourcentage de significativité de le modèle de bernoulli
+print("pourcentage de significativite gene olfa")
+sum(bernou_g_olfa$pvaleur < bonf_pval)/384
+
+# pour tous les gènes 
+print("tous les genes")
+sum(bernou_all$pval < bonf_pval)/nrow(bernou_all)
+
+# 384 random gene 
+print("genes random")
+sum(bernou_rnd$pval < bonf_pval)/384
+```
+
+Les gènes olfa sont significatifs à 80 % avec le modèle de bernoulli. Alors que pour les 384 gènes pris au hasard, le taux de significativité est d'environ 42%.
+
+
+```{r}
+#sum(bernou_all$pval > bonf_pval)
+#plot(density(bernou_all[bernou_all$pval > bonf_pval,]$p))
+#lines(density(bernou_all$p), lty=2)
+```
+
+
+
+
+
+# Résultats et  comparaison 
+
+Dans cette section nous allons effectuer une comparaison des résultats obtenus à partir des modèles. 
+
+
+Selon MacDonald and Lattimore (2010), il n’existe pas de meilleur modèle à proprement parlé,
+tout dépend du type de données utilisées ainsi que de leur capacité prédictive. 
+De plus il n'y a pas critère clair concernant la proportion de zéros
+acceptable ou non pour justifier l’utilisation de la loi binomiale négative ou les modèles
+modifiés en zéro. L’article de Yau, Wang, & Lee (2003) propose alors de comparer l’indice
+d’ajustement, le BIC. 
+
+D'après nos lectures,  nous avons décidé de juger la qualité de nos modèles sous trois angles.
+Dans un premier temps, nous allons nous intéresser à leur capacité à prédire la proportion de zéro. 
+
+Dans un second temps , nous allons regarder les critères d'ajustement: le Critère d'information d'Akaike (AIC) et le Critère d'information bayésien(BIC). Ce critère, plus il est faible meilleur est le modèle. 
+Malheureusent, il n'est pas aisé de comparer différentes distributions entre elles.
+
+Selon (Atkins & Gallop, 2010), le modèle de Poisson est niché dans le modèle Négative Binomial alors que le
+Zero Inflated de Poisson est niché dans le Zero Inflated Negative Binomial.  Il est possible de comparer le modèle de Poisson avec le modèle négative binomiale  et le Zero Inflated de Poisson avec le Zero Inflated Negative binomial grâce au test du rapport de vraisemblance.
+
+Enfin nous allons comparer les modèles non imbriqués  Poisson avec ZIP , négative binomiale avec ZINB grâce de au test d'inflation zéro de Vuong
+
+(Vuong,1989)
+
+
+
+## Estimation des zéros par les modèles
+
+Dans cette partie nous allons évaluer la capacité des modèles à modéliser la proportion de zéro.
+
+
+
+
+```{r, fig.show='hold', out.width="50%", fig.cap="comparaison zip"}
+#en prenant juste les gènes olfa  
+
+plot(zinb_pscl_olfa_modelise$prop_true, zinb_pscl_olfa_modelise$prop_predicte, col = 1, main = "Zinb", xlab = "proportion reelle de zero", ylab = "proportion du modele" )
+abline(a = 0,b = 1)
+
+plot(zinb_pscl_olfa$prop_true, bernou_g_olfa$prop_predicte, col = 2, main ="Bernoulli", xlab = "proportion reelle de zero", ylab = "proportion du modele" )
+abline(a = 0,b = 1)
+
+plot(zinb_pscl_olfa$prop_true, poiss_g_tisssue$prop_predicte, col = 3, main ="Poisson", xlab = "proportion reelle de zero", ylab = "proportion du modele" )
+abline(a = 0,b = 1)
+
+plot(zinb_pscl_olfa$prop_true, nb_olfa_glm$prop_predicte, col = 4, main ="Negative Binomiale", pch = 19, xlab = "proportion reelle de zero", ylab = "proportion du modele" )
+abline(a = 0,b = 1)
+#points(zinb_pscl_olfa$prop_true,nb_norm$prop_predicte,col = 7,pch = 19)
+
+plot(zinb_pscl_olfa$prop_true, zip_pscl_olfa$prop_predicte ,pch = 19, col = 5, main = "Zip", xlab = "proportion reelle de zero", ylab = "proportion du modele")
+abline(a = 0,b = 1)
+#points(zinb_pscl_olfa$prop_true,zip_olfa$prop_predicte,col = 7,pch = 19)
+```
+
+
+
+Parmis les 5 modèles , le modèle de poisson est le moins bon pour prendre en compte le nombre de zéro dans les observations.
+Le modèle de Bernoulli, le zip , la négative binomiale, et le zinb parviennent à approcher une estimation de zéro très proche des observations réelles.
+
+Dans ce tableau, nous résumons l'erreur quadratique moyenne des proportions de zéro prédites par rapport aux vraies.
+
+#### Pour les gènes olfa:
+
+```{r}
+# cette fonction calcule l'erreur quadratique moyenne de la prédiction de zéro.
+
+ecart_zero = function(result){
+  mean((result$prop_predicte-result$prop_true)^2)
+}
+
+#ecart pour chacun des modeles
+ecart_poisson = ecart_zero(poiss_g_tisssue)
+ecart_nb = ecart_zero(nb_olfa_glm)
+ecart_zip = ecart_zero(zip_pscl_olfa)
+ecart_zinb = ecart_zero(zinb_pscl_olfa)
+ecart_bernoulli = ecart_zero(bernou_g_olfa)
+
+# pour les modèles zip et zinp , il faut prendre uniquement les genes qui ont été modélisé = ceux avec des zeros
+ecart_zip_mod = ecart_zero(zip_pscl_olfa_modelise)
+ecart_zinb_mod = ecart_zero(zinb_pscl_olfa_modelise)
+
+Modele = c("Poisson", "NB", "ZIP", "ZINB", "Bernoulli")
+#ecart_observe = c(ecart_poisson,ecart_nb ,ecart_zip,ecart_zinb,ecart_bernoulli)
+EQM = c(ecart_poisson, ecart_nb ,ecart_zip_mod, ecart_zinb_mod, ecart_bernoulli)
+
+EQM <- format(EQM, scientific = TRUE, digit = 3)
+
+tableau_zero = data.frame(Modele, EQM)
+
+kable(tableau_zero, format = "html", caption = "EQM Nombre de zero, genes olfa")%>%
+  kable_styling(full_width = F)
+```
+
+
+#### Pour les gènes random:
+
+```{r}
+#calcul des ecarts pour les genes pris au hasard
+ecart_poisson_rnd = ecart_zero(poiss_g_rnd)
+ecart_nb_rnd = ecart_zero(nb_g_data_rnd)
+ecart_bernoulli_rnd = ecart_zero(bernou_g_rnd)
+#non utilise
+ecart_zip_rnd = ecart_zero(zinb_pscl_rnd)
+ecart_zinb_rnd = ecart_zero(zinb_pscl_rnd)
+
+# pour les modèles zip et zinp: prendre que les gènes effectivement modélisés
+ecart_zip_mod_rnd = ecart_zero(zip_pscl_rnd_modelise )
+ecart_zinb_mod_rnd = ecart_zero(zinb_pscl_rnd_modelise)
+
+Modele = c("Poisson","NB","ZIP","ZINB","Bernoulli")
+#non utilise
+ecart_observe_rnd = c(ecart_poisson_rnd,ecart_nb_rnd ,ecart_zip_rnd,ecart_zinb_rnd,ecart_bernoulli_rnd)
+
+EQM_rnd = c(ecart_poisson_rnd, ecart_nb_rnd, ecart_zip_mod_rnd, ecart_zinb_mod_rnd, ecart_bernoulli_rnd)
+EQM_rnd <- format(EQM_rnd, scientific = TRUE, digit = 3)
+
+
+tableau_zero_rnd = data.frame(Modele, EQM_rnd)
+
+kable(tableau_zero_rnd, format = "html", caption = "EQM Nombre de zero, genes random")%>%
+  kable_styling(full_width = F)
+
+```
+
+Comme nous venons de le voir, le modèle de bernoulli est le mieux adapté parmis les cinq considérés pour modéliser le nombre de zéro des gènes olfa. 
+Ensuite vient de zip et zinb (pour ceux nous avons regarder plutôt  l'erreur des pour les gènes modélisés en non pour tous les gènes).
+
+
+## To do for all gene 
+
+
+Nous faisons un test de rapport de vraisemblance entre les modèles imbriqués
+
+
+## Test de Rapport de vraisemblance poisson et nb , zip et zinb
+
+#### NB vs POISSON
+
+```{r}
+library(MASS) # for the negative binomial
+library(lmtest) # for testing lr for nested model
+
+## Fonction qui donne le rapport de vraisemblance entre NB et POIS
+
+lrtest_nb_poiss  = function(data,tissue){
+  answer = t(apply(data, 2, function(c){
+    y = c
+    modelpoiss = glm(y ~ tissue, family = "poisson", maxit = 100) 
+    modelnb = try(glm.nb(y ~ tissue, maxit = 100), TRUE ) 
+     if( !inherits(modelnb, "try-error")){ # if there is no error message
+        test = lrtest(modelnb, modelpoiss)
+        chisq = test$Chisq[2] # two times logLik difference
+        pvaleur = test$`Pr(>Chisq)`[2]
+     }
+     else{   # si l'algo nb n'a pas convergé alors nous utilisons par défaut poisson donc pas besoin du test. tout est fixé à zéro
+       chisq = 0
+       pvaleur = 0
+     }
+    return(c(chisq = chisq,pvaleur = pvaleur))
+  }))
+  answer = data.frame(answer)
+  colnames(answer) = c("chisq","pvaleur")
+  return(answer)
+}
+```
+
+
+### NB VS Poiss, sur les gènes olfa 
+
+```{r}
+#test de rapport de vraisemblance olfa nb et poiss 
+# si ce test est significative alors le modèle nb est privilégié
+lrtest_nb_poiss_olfa = lrtest_nb_poiss(data_norm, tissue_olfa)
+head(lrtest_nb_poiss_olfa)
+
+res <- sum(lrtest_nb_poiss_olfa$pvaleur < bonf_pval)
+```
+
+Ce test est signifcatif pour `r res` gènes sur 384, au seuil de bonferroni. La Négative Binomiale modélise mieux les gènes olfa que la loi de poisson 
+
+### NB VS Poiss, sur les gènes pris au hasard 
+
+```{r}
+lrtest_nb_poiss_rnd = lrtest_nb_poiss(data_norm_rnd,tissue_rnd)
+head(lrtest_nb_poiss_rnd)
+res_rnd <- sum(lrtest_nb_poiss_rnd$pvaleur < bonf_pval)
+```
+
+Pour les gènes random, le test est significatif pour `r res_rnd`, au seuil de bonferroni. La Négative Binomiale modélise mieux les gènes random que la loi de poisson.
+
+?? On peut donc penser que la négative binomiale est mieux adaptée dans le cadre de la modelisation de gènes. == non specifique aux genes olfa
+
+
+
+## Rapport de vraisemblance : ZIP vs ZINB
+
+
+```{r}
+library(pscl) # for zero inflated model
+library(lmtest) # for testing lr for nested model
+
+# Fonction test du rapport de vraisemblance poisson vs negbin
+
+lrtest_zip_zinb = function(data,tissue){
+  answer = t(apply(data,2,function(c){
+    y = c
+    modelzip = try(zeroinfl(y ~ tissue | 1 ,dist = "poisson",link="logit",maxit = 100),TRUE) # try of zip model 
+    modelzinb = try(zeroinfl(y ~ tissue  |1,dist = "negbin",link="logit",maxit = 100),TRUE) # try of zinb model
+     if( !inherits(modelzip, "try-error") & !inherits(modelzinb, "try-error")){ # if there is no error message
+        test = lrtest(modelzinb,modelzip)
+        chisq = test$Chisq[2] # two times logLik difference
+        pvaleur = test$`Pr(>Chisq)`[2]
+     }
+     else{   # si l'algo nb n'a pas convergé alors nous utilisons par défaut poisson donc pas besoin du test. tout est fixé à zéro
+       chisq = 0
+       pvaleur = 0
+     }
+     return(c(chisq = chisq, pvaleur = pvaleur))
+    
+  }))
+  
+  answer = data.frame(answer)
+  colnames(answer) = c("chisq","pvaleur")
+  return(answer)
+}
+```
+
+### rapport de vraisemblance: ZIP vs ZINB, gènes olfa
+
+```{r}
+# test du rapport de vraisemblance poisson vs negbin pour les genes olfa
+lrtest_zip_zinb_olfa = lrtest_zip_zinb(data_norm, tissue_olfa)
+
+head(lrtest_zip_zinb_olfa)
+res <- sum(lrtest_zip_zinb_olfa$pvaleur<bonf_pval)
+
+```
+
+### rapport de vraisemblance: ZIP vs ZINB, gènes random
+
+```{r}
+#test du rapport de vraisemblance pour les genes random
+lrtest_zip_zinb_rnd = lrtest_zip_zinb(data_norm_rnd,tissue_rnd)
+head(lrtest_zip_zinb_rnd)
+res_rnd <- sum(lrtest_zip_zinb_rnd$pvaleur<bonf_pval)
+```
+
+# !!! 
+Le test du rapport de vraisemblance entre le modèle ZIP et le modèle ZINB est significatif pour `r res` gènes olfa et `r res_rnd` gènes random.
+
+
+## Test de Vuong pour les modèles non imbriqués poisson,zip et nb ,zinb 
+
+Ce test vérifie si les modèles à inflation zéro sont mieux que les modèles ordinaires (poisson ,nb).
+
+Sous l'hypothèse nulle les rapports de vraisemblance des deux modèles (suit une loi normale de moyenne nulle) découlant du fait que les vraisemblances   des deux modèles sont généralement proche #*
+
+```{r}
+library(nonnest2) # package for vuong test for non nested model
+library(pscl) # for zero inflated model
+
+vuong_zip_poisson = function(data,tissue){
+  answer = t(apply(data,2,function(c){
+    y = c 
+    modelpoiss = glm(y ~ tissue, family="poisson",maxit = 100)
+    modelzip = try(zeroinfl(y ~ tissue | 1 ,dist = "poisson",link="logit",maxit = 100),TRUE) # try of zip model
+    if( !inherits(modelzip, "try-error")){
+      test = try(vuongtest(modelzip,modelpoiss),TRUE)
+      
+      if(!inherits(test,"try-error")){
+        z = test$LRTstat # la statistique du test de vuong 
+        
+          if(z>= 0){ # si la statistique est positive alors zip est meilleur
+            pvaleur =  test$p_LRT$A
+            meilleur = "zip"
+            }
+          else{ # sinon le modèle de poisson suffit
+          pvaleur =  test$p_LRT$B 
+          meilleur = "poisson"
+          } 
+      }
+      else{ # si le test n'est pas possible alors 
+        z = 0 
+        pvaleur = 0
+        meilleur = "NoTest"
+      }
+    }
+    else{
+      z = 0
+      pvaleur = 0
+      meilleur = "NoInflation"
+    }
+    
+    return(c(z = z, pvaleur = pvaleur, meilleur = meilleur))
+  }))
+  answer = data.frame(answer)
+  colnames(answer) = c("z","pvaleur","meilleur")
+  return(answer)
+}
+```
+
+
+### Vuong ZIP vs poisson: genes olfa
+
+```{r}
+vuong_zip_poisson_olfa = vuong_zip_poisson(data_norm, tissue_olfa)
+
+
+#modification du format de pvaleur
+vuong_zip_poisson_olfa$pvaleur <- as.numeric(as.matrix(vuong_zip_poisson_olfa$pvaleur))
+
+trie <- vuong_zip_poisson_olfa[vuong_zip_poisson_olfa$pvaleur<bonf_pval,]
+
+res <- data.frame(ZIP = c(sum(vuong_zip_poisson_olfa$meilleur == "zip"), sum(trie$meilleur == "zip")), 
+                  Poisson = c(sum(vuong_zip_poisson_olfa$meilleur == "poisson"), sum(trie$meilleur == "poisson")) , 
+                  NoTest = c(sum(vuong_zip_poisson_olfa$meilleur == "NoTest"), sum(trie$meilleur == "NoTest")), 
+                  NoInflation = c(sum(vuong_zip_poisson_olfa$meilleur == "NoInflation" ), sum(trie$meilleur == "NoInflation")))
+                  
+rownames(res) <- c("Total", "Significatif")
+
+kable(res, format = "html", digits = 3, caption = "Vuong: ZIP vs Poisson, genes olfa")%>%
+  kable_styling(full_width = F)
+
+```
+
+### Vuong ZIP vs poisson : genes random  
+
+
+```{r}
+vuong_zip_poisson_rnd = vuong_zip_poisson(data_norm_rnd,tissue_rnd)
+
+kable(head(vuong_zip_poisson_rnd), format = "html", digits = 3, caption = "Resultats Vuong: ZIP vs Poisson, genes random")%>%
+  kable_styling(full_width = F)
+```
+
+```{r}
+#modification du format de pvaleur
+vuong_zip_poisson_rnd$pvaleur <- as.numeric(as.matrix(vuong_zip_poisson_rnd$pvaleur))
+
+trie <- vuong_zip_poisson_rnd[vuong_zip_poisson_rnd$pvaleur<bonf_pval,]
+
+res <- data.frame(ZIP = c(sum(vuong_zip_poisson_rnd$meilleur == "zip"), sum(trie$meilleur == "zip")), 
+                  Poisson = c(sum(vuong_zip_poisson_rnd$meilleur == "poisson"), sum(trie$meilleur == "poisson")) , 
+                  NoTest = c(sum(vuong_zip_poisson_rnd$meilleur == "NoTest"), sum(trie$meilleur == "NoTest")), 
+                  NoInflation = c(sum(vuong_zip_poisson_rnd$meilleur == "NoInflation" ), sum(trie$meilleur == "NoInflation")))
+                  
+rownames(res) <- c("Total", "Significatif")
+
+kable(res, format = "html", digits = 3, caption = "Vuong: ZIP vs Poisson, genes random")%>%
+  kable_styling(full_width = F)
+```
+
+
+
+### Vuong zinb vs NB
+
+```{r}
+library(MASS) # for negative binomial 
+library(nonnest2) # package for vuong test for non nested model
+library(pscl) # for zero inflated model
+
+vuong_zinb_nb = function(data,tissue){
+  answer = t(apply(data,2,function(c){
+    y = c 
+    modelnb = try(glm.nb(y ~ tissue,maxit = 100),TRUE )
+    modelzinb = try(zeroinfl(y ~ tissue  |1,dist = "negbin",link="logit",maxit = 100),TRUE) # try of zinb model
+    if( !inherits(modelzinb, "try-error") &  !inherits(modelnb, "try-error") ){
+      test = try(vuongtest(modelzinb,modelnb),TRUE)
+      
+      if(!inherits(test,"try-error")){
+        z = test$LRTstat # la statistique du test de vuong 
+        if(z>= 0){ # si la statistique est positive alors zinb est meilleur
+          pvaleur =  test$p_LRT$A
+          meilleur = "zinb"
+        }
+        else{ # sinon le modèle de nb suffit
+        
+          pvaleur =  test$p_LRT$B 
+          meilleur = "nb"
+        }  
+      }
+      else{ # si le test n'est pas possible alors 
+        z = 0 
+        pvaleur = 0
+        meilleur = "NoTest"
+      }
+    }
+    else{
+      z = 0
+      pvaleur = 0
+      meilleur = "NoInflation"
+    }
+    return(c(z = z, pvaleur = pvaleur, meilleur = meilleur))
+  }))
+  answer = data.frame(answer)
+  colnames(answer) = c("z","pvaleur","meilleur")
+  return(answer)
+}
+```
+
+
+```{r}
+#vuong_zinb_nb(data_norm[,300:315],tissue_olfa)
+```
+
+
+### Vuong zinb vs NB : gènes olfa 
+
+```{r}
+vuong_zinb_nb_olfa = vuong_zinb_nb(data_norm, tissue_olfa)
+head(vuong_zinb_nb_olfa)
+
+#modification du format de pvaleur
+vuong_zinb_nb_olfa$pvaleur <- as.numeric(as.matrix(vuong_zinb_nb_olfa$pvaleur))
+
+trie <- vuong_zinb_nb_olfa[vuong_zinb_nb_olfa$pvaleur<bonf_pval,]
+
+res <- data.frame(ZINB = c(sum(vuong_zinb_nb_olfa$meilleur == "zinb"), sum(trie$meilleur == "zinb")), 
+                  NB = c(sum(vuong_zinb_nb_olfa$meilleur == "nb"), sum(trie$meilleur == "nb")) , 
+                  NoTest = c(sum(vuong_zinb_nb_olfa$meilleur == "NoTest"), sum(trie$meilleur == "NoTest")), 
+                  NoInflation = c(sum(vuong_zinb_nb_olfa$meilleur == "NoInflation" ), sum(trie$meilleur == "NoInflation")))
+                  
+rownames(res) <- c("Total", "Significatif")
+
+kable(res, format = "html", digits = 3, caption = "Vuong: ZINB vs NB, genes olfa")%>%
+  kable_styling(full_width = F)
+
+```
+
+
+
+### Vuong zinb vs NB : gènes random
+
+
+```{r}
+vuong_zinb_nb_rnd = vuong_zinb_nb(data_norm_rnd, tissue_rnd)
+head(vuong_zinb_nb_rnd)
+```
+
+```{r}
+
+#modification du format de pvaleur
+vuong_zinb_nb_rnd$pvaleur <- as.numeric(as.matrix(vuong_zinb_nb_rnd$pvaleur))
+
+trie <- vuong_zinb_nb_rnd[vuong_zinb_nb_rnd$pvaleur<bonf_pval,]
+
+res <- data.frame(ZINB = c(sum(vuong_zinb_nb_rnd$meilleur == "zinb"), sum(trie$meilleur == "zinb")), 
+                  NB = c(sum(vuong_zinb_nb_rnd$meilleur == "nb"), sum(trie$meilleur == "nb")) , 
+                  NoTest = c(sum(vuong_zinb_nb_rnd$meilleur == "NoTest"), sum(trie$meilleur == "NoTest")), 
+                  NoInflation = c(sum(vuong_zinb_nb_rnd$meilleur == "NoInflation" ), sum(trie$meilleur == "NoInflation")))
+                  
+rownames(res) <- c("Total", "Significatif")
+
+kable(res, format = "html", digits = 3, caption = "Vuong: ZINB vs NB, genes random")%>%
+  kable_styling(full_width = F)
+```
+
+# Resultats AIC _ prop_zero
+
+```{r}
+#test ana
+#recap info
+# genes olfa
+#proportion de zero
+#poiss_g_tisssue$prop_true
+#moyenne
+#norm_olfa$mu 
+#var 
+#(norm_olf$sigma)^2
+#aic poisson modele tissue
+#poiss_g_tisssue$aic_tissue
+#aic NB modele tissue
+#nb_olfa_glm$aic_tissue
+#aic zip modele tissue
+#zip_pscl_olfa$AIC_tissue
+#!! changer l aic pour tous les gens ou prop zero = nulle
+#liste des genes qui n'ont pas de zero notzip
+#aic zinb modele tissue
+#zinb_pscl_olfa$AIC_tissue
+# pas de modelisation sur: notzinb
+#bernouilli
+#bernou_g_olfa$aic_tissue
+
+#calcul des moyennes et var sur donnees normalisees
+mean_var = function(data){ 
+  calc = t(apply(data, 2, function(c) {
+    #estimation de lambda par la moyenne de chaque gène
+    mean = mean(c)
+    #calcul des proba pour chaque gène
+    var = var(c)
+    #proportion de zero
+    p = mean((c==0)+ 0)
+    return(c(mean = mean, var = var, p = p))
+  }))
+  return(data.frame(calc))
+}
+
+calc_olfa <- mean_var(data_norm)
+
+resum_olfa <- data.frame(p = round(calc_olfa$p, 2), 
+                         mean = round(calc_olfa$mean, 0), 
+                         var = format(calc_olfa$var, scientific = TRUE, digit = 3),
+                         poisson = round(poiss_g_tisssue$aic_tissue, 0),
+                         NB = round(nb_olfa_glm$aic_tissue, 0), 
+                         ZIP = round(zip_pscl_olfa$AIC_tissue, 0),
+                         ZINB = round(zinb_pscl_olfa$AIC_tissue, 0),
+                         Bernou = round(bernou_g_olfa$aic_tissue, 0))
+
+rownames(resum_olfa) <- olfa
+
+#resum_olfa$ZIP <- if(rownames(resum_olfa)==notzip){resum_olfa$ZIP==0}
+
+
+```
+
+
+```{r}
+plot(resum_olfa$p, resum_olfa$poisson, col = "blue", xlab = "proportion de zero", ylab = "AIC_tissu", main = "AIC model en fonction de p")
+lines(resum_olfa$NB, col = "deeppink")
+lines(resum_olfa$ZIP, col = "cadetblue")
+lines(resum_olfa$ZINB, col = "cyan3")
+lines(resum_olfa$Bernou, col = "darkgoldenrod1")
+legend("topright", c("poisson", "NB", "ZIP", "ZINB", "Bernou"), col = c("blue", "deeppink", "cadetblue", "cyan3", "darkgoldenrod1" ), box.lty = 0)
+
+```
+
+
+```{r, fig.show='hold', out.width="50%", fig.cap="Comparaison des AIC pour chaque loi, avec tissu"}
+plot(resum_olfa$p, resum_olfa$poisson, col = "blue", xlab = "proportion de zero", ylab = "AIC tissu", main = "Poisson")
+plot(resum_olfa$p, resum_olfa$NB, col = "deeppink", xlab = "proportion de zero", ylab = "AIC tissu", main = "NB")
+
+plot(resum_olfa$p, resum_olfa$ZIP, col = "cadetblue", xlab = "proportion de zero", ylab = "AIC tissu", main = "ZIP")
+plot(resum_olfa$p, resum_olfa$ZINB, col = "cyan3", xlab = "proportion de zero", ylab = "AIC tissu", main = "ZIBN")
+plot(resum_olfa$p, resum_olfa$Bernou, col = "deeppink", xlab = "proportion de zero", ylab = "AIC tissu", main = "Bernouilli")
+
+```
+
+
+```{r}
+kable(resum_olfa, format = "html", caption = "Resultat all models")%>%
+  kable_styling(full_width = F)
+```
+
+
+# Perspectives 
+
+
+Pour conclure ce projet, il est nécessaire de préciser les limites de notre travail par rapport aux méthodes d'analyse utilisées.
+Les tests effectués nécessites en amont certaines conditions sur les résidus, et l'ajustement des distributions utilisées par rapport aux données(test de déviance par exemple)
+
+Afin d'avoir des tests plus robustes, il faudrait envisager d'effectuer une vérification des conditions d'application. 
+L'intégration d'autres co-variables pourrait permettre d'avoir des modèles plus vraisemblants.
+
+Après avoir renforcé les résultats par des tests robustes, il sera intéressant de chercher d'autres gènes ayant les mêmes profils que les gènes olfa. 
+
+
+
+# Session Information
+
+```{r, results="verbatim"}
+sessionInfo()
+```
+
+# Bibliographie
+
+[ normal]David I. Warton & Mitchell Lyons & Jakub Stoklosa1 & Anthony R. Ives3 Three points to consider when choosing a LM or GLM
+test for count data
+
+
+[poisson dispersion] de Jong & Heller (2008), sections 6.2 et 6.3, Hilbe (2011) Negative Binomial Regression
+
+[consistenceglm] Fahrmeir , Kaufmann (1985),Consistency and Asymptotic Normality of the Maximum Likelihood Estimator in Generalized Linear Models
+
+Mullahy, J. (1986). Specification and testing of some modified count data. Journal of
+Econometrics(33), 341-365.
+
+
+
+
+
+[comparaison modèle]MacDonald, J. M., & Lattimore, P. K. (2010). Count Models in Criminology Handbook of
+Quantitative Criminology (pp. 683-698): Springer.
+
+[modèle niché]Atkins, D. C., & Gallop, R. J. (2007). Rethinking how family researchers model infrequent
+outcomes: a tutorial on count regression and zero-inflated models. Journal of family
+psychology : JFP : journal of the Division of Family Psychology of the American
+Psychological Association (Division 43), 21(4), 726-735.
+
+
+[test pour modèle non imbriqué] Vuong, Q. H. (1989). Likelihood Ratio Tests for Model Selection and Non-Nested
+Hypotheses. Econometrica, 57(2), 307-333.
