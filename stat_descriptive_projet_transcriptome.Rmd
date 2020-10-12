@@ -1,0 +1,607 @@
+---
+title: "Statistiques descriptives projet transcriptome"
+author: "Kodjo, Anh, Marie-Anne & Ana"
+date: "`r Sys.Date()`"
+output: 
+  rmarkdown::html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: true
+---
+
+```{r, echo=FALSE, eval=TRUE}
+# rmarkdown::render("stat_descriptive_projet_transcriptome.Rmd", output_format="word_document", encoding="UTF-8")
+knitr::opts_chunk$set(collapse=TRUE, comment = "#>", fig.width=9, fig.height=6, eval=TRUE, echo=FALSE, dpi=150)
+```
+
+# Présentation
+
+Ce document est une analyse descriptive, pour lequel on a utilisé différentes données: 
+
+* des données brutes (c’est à dire le nombre de read initial, sans aucun traitement)
+* des données normalisées (3 méthodes : zero/pas_zero, DESeq2 et DESeq2 + pseudo log2)
+* des co-facteurs (gènes d’intérets, sexe, tissu)
+
+#TO DO : ajouter une explication pourquoi normaliser et de DESEQ 2 et LOG + 1
+
+# Chargement des données
+
+## Données d'expression des gènes
+
+```{r label="loading data..."}
+study_gtex_filename = "study_gtex.rds"
+if (!exists("study_gtex")) {
+  print("Loading study_gtex...")
+  study_gtex = readRDS(study_gtex_filename)  
+}
+s = study_gtex
+
+#if (!exists("data_raw")|!exists("data_norm")|!exists("data_lnorm")) {
+  # données brutes
+  data_raw = as.matrix(s$stuffs$raw_counts)
+  # données zéro pas /zéro
+  data_zero = (data_raw!=0) + 0
+  # donnée normalisées avec DESeq2
+  countData = data_raw
+  colData = data.frame(id=colnames(countData))
+  dds = DESeq2::DESeqDataSetFromMatrix(countData=countData, colData=colData, design= ~ id)
+  dds = DESeq2::estimateSizeFactors(dds)
+  data_norm = ceiling(DESeq2::counts(dds, normalized=TRUE))
+  # log_norm_counts = SummarizedExperiment::assay(rld)
+  data_lnorm = log2(data_norm + 1)  
+#}
+
+#saveRDS(data_raw  , "data_raw.rds")
+#saveRDS(data_lnorm, "data_lnorm.rds")
+#saveRDS(data_norm , "data_norm.rds")
+#saveRDS(data_zero , "data_zero.rds")
+
+
+df_raw = data.frame(t(data_raw))
+df_zero = data.frame(t(data_zero))
+df_norm = data.frame(t(data_norm))
+df_lnorm = data.frame(t(data_lnorm))
+```
+
+On charge les données fournies au début du projet et on produit : 
+
+  - 4 matrices, nommées `data_raw`, `data_norm` , `data_zero` et `data_lnorm`, au format gènes (lignes) x échantillons (colonnes), ce format est imposé par le projet.
+  - 4 dataframes, nommées `df_raw`, `df_zero`, `df_norm` et `df_lnorm` au format échantillons (lignes) x gènes (colonnes), nous manipulerons ce format qui correspond plus à ce que nous avons l’habitude de voir en statistiques (un individu par ligne).
+
+Le jeu de données comporte `r nrow(data_raw)` gènes et `r ncol(data_raw)` échantillons.
+
+On remarque que les différentes transformations apportées aux données n’ont ni ajouté, ni retiré, ni déplacé de zéro.
+
+```{r label="Adding zero ?", echo=TRUE, results="verbatim"}
+# Avons nous ajouté des zéro ? ---> NON!
+sum(data_raw  ==0)
+sum(data_zero  ==0)
+sum(data_lnorm==0)
+sum(data_norm ==0)
+sum(data_raw  ==0 & data_zero  ==0 & data_lnorm==0 & data_norm==0)
+```
+
+## Co-facteurs
+
+```{r}
+# gènes
+#stockage des noms des genes dans une variable => utile pour la suite
+genes = colnames(df_raw)
+# ouverture du fichier avec les noms des genes olfa
+features_olfa = readRDS("features_olfa.rds")
+# recherche des genes olfa dans notre jeu de données
+olfa_genes =intersect(rownames(features_olfa), genes)
+
+# -- co-facteurs
+#recuperation du type de tissu pour chaque echantillon
+tissue = s$exp_grp$tissue_group_level1
+# tissue = s$exp_grp$organism_part
+#recuperation du sex pour chaque echantillon
+sex = s$exp_grp$sex.x
+#ajout des noms des echantillons a sex et tissue
+names(tissue) = names(sex) = rownames(s$exp_grp)
+
+#ajout de deux colonnes pour chaque df : tissue + sex
+  df_raw$sex    = sex   [rownames(  df_raw)]
+ df_zero$sex    = sex   [rownames( df_zero)]
+ df_norm$sex    = sex   [rownames( df_norm)]
+df_lnorm$sex    = sex   [rownames(df_lnorm)]
+  df_raw$tissue = tissue[rownames(  df_raw)]
+ df_zero$tissue = tissue[rownames( df_zero)]
+ df_norm$tissue = tissue[rownames( df_norm)]
+df_lnorm$tissue = tissue[rownames(df_lnorm)]
+
+
+```
+
+Plusieurs co-facteurs enrichissent les données, notamment:
+- sex : indique le sexe de la personne de laquelle l'échantillon est issu 
+- tissue_group_level1 : 31 groupes qui représentent 31 types de tissus (ex: cerveau, foie, ...)
+- tissue_group_level2 : 17 groupes de tissus (niveau supérieur des types de tissus, qui englobe le précédent)
+- tissue_group_level3 : 2 groupes de tissus (niveau supérieur des types de tissus, qui englobe les autres, constitué des cellules germinales ou somatiques)
+- organism_part : 30 organes (ce sont les organes desquels sont extraits les prélevements de tissu) 
+
+
+Nous avons fait le choix d'utiliser uniquement les deux co-facteurs suivants : le sexe et le groupe de tissu nommé "tissue_group_level1".
+Les variables tissue_group_level2 et tissue_group_level3 étant des parties dans lesquelles sont imbriqués le groupe 1. 
+La variable organism_part est très similaire à tissue_group_level1 avec quelques petites différences. Mais, il est commun dans ce type d'analyse d'utiliser tissue_group_level1. 
+
+
+```{r}
+# table(s$exp_grp$tissue_group_level3, s$exp_grp$tissue_group_level2)
+# table(s$exp_grp$tissue_group_level2, s$exp_grp$tissue_group_level1)
+# table(s$exp_grp$tissue_group_level1, s$exp_grp$organism_part)
+```
+
+Notre projet porte sur un groupe de gènes en particulier les gènes olfa: `r length(olfa_genes)` de la voie de signalisation *KEGG_OLFACTORY_TRANSDUCTION* (aka "OLFA").
+
+
+
+# Analyse descriptive des données d'expression brutes
+
+## Tous les gènes
+
+
+Les données sont présentées dans une dataframe de `r nrow(df_raw)` échantillons (lignes) et `r ncol(df_raw)` gènes (colonnes).
+
+Pour chaque échantillon, on calcule le nombre total de read. L'objectif étant de détecter les échantillons avec un faible niveau de signal (une faible couverture en termes de nombre de reads et potentiellement un grand nombre de zéro “techniques”). 
+
+
+```{r echo=TRUE}
+#ajout d'une nouvelle colonne avec le nombre de read totaux par echantillon
+df_raw$nb_read_total = apply(df_raw[,genes] , 1, sum)
+layout(matrix(1:2, 1), respect=TRUE)
+plot(density(log10(df_raw$nb_read_total)), main="log-distribution du niveau \n de signal par echantillon ")
+```
+
+
+D'après le graphique ci-dessus, on peut voir que la couverture des échantillons est à la fois bonne ($> 10^7$ reads) et homogène (un facteur $10$ entre le plus et le moins couvert).
+
+La représentation fournie par le graphique ci-dessous est le nombre total de read par échantillon et par tissu. La couverture est également bonne et homogène.
+
+```{r}
+boxplot(log10(df_raw$nb_read_total)~tissue[colnames(data_raw)], las=2, main = "log-distribution du niveau \nde signal par echantillon et par tissu")
+```
+
+Les graphiques suivants, issus du dataframe `df_lnorm` soit les données pseudo log transformées, permettent de mieux comprendre le jeu de données. 
+
+
+
+```{r, fig.show='hold', out.width="50%", fig.cap="Distribution des donnees"}
+plot(density(as.matrix(df_lnorm[,genes])),
+main = "distribution de l'ensemble des donnees")
+plot(density(apply(df_lnorm[,genes], 1, mean)), main = "densite des moyennes des echantillons")
+plot(density(apply(df_lnorm[,genes], 2, mean)), main = "densite des moyennes des genes")
+```
+
+Le premier graphique, affiche la densité de l'ensemble des valeurs de la matrice. Ainsi, on peut voir que les données comportent beaucoup de zéro et qu'il y a une forte dispersion. 
+
+Le second graphique, affiche la densité des moyennes par échantillon, ainsi on peut voir que la distribution prend une forme gaussienne centrée autour de $10^{6.5}$. Les éhcantillons, sont donc équivalents et tous exploitables. 
+
+Le troisième graphique, affiche la densité des moyennes par gènes. On observe qu'il y a deux valeurs autour desquelles les données se concentrent. Un premier pic en zéro et un second autour de $10^10$. Il y a donc une très forte dispersion dans l'expression des gènes. Certains ont une valeur moyenne très faible alors que d'autres très élevés. 
+
+
+## Les gènes *OLFA*
+
+Les gènes *OLFA* sont les 384 gènes qui nous intéressent et qui ont la particularité de s'exprimer uniquement dans certains tissus. De part, leur caractéristique on/off on s'attend à observer de nombreuses valeurs nulles. 
+
+Les trois graphiques ci-dessous, permettent de comparer les distributions globales et marginales (par ligne et par colonne) de tous les gènes et des gènes *OLFA*.
+
+
+```{r, fig.show='hold', out.width="50%", fig.cap="Modelisation de la loi NB"}
+
+plot(density(as.matrix(df_lnorm[,genes])), col="darkblue", lty=2, xlim=c(0,15), ylim=c(0,2.7), main = "all value for all genes vs olfa genes", cex.main = 0.9)
+lines(density(as.matrix(df_lnorm[,olfa_genes])))
+legend("topright", legend = c("all genes", "olfa genes") ,col = c("darkblue", "black"))
+
+plot(density(apply(df_lnorm[,genes], 1, mean)), col="darkblue", lty=2, xlim=c(0,15), ylim=c(0,2.7), main = "observations mean all genes vs olfa genes", cex.main = 0.9)
+lines(density(apply(df_lnorm[,olfa_genes], 1, mean)))
+legend("topright", legend = c("all genes", "olfa genes") ,col = c("darkblue", "black"))
+
+plot(density(apply(df_lnorm[,genes], 2, mean)), col="darkblue", lty=2, xlim=c(0,15), ylim=c(0,2.7), main = "Mean of all genes vs olfa genes", cex.main = 0.9)
+lines(density(apply(df_lnorm[,olfa_genes], 2, mean)))
+legend("topright", legend = c("all genes", "olfa genes") ,col = c("darkblue", "black"))
+```
+
+Le premier graphique, représente l'ensemble des valeurs des deux matrices. On peut voir qu'en zéro il y a un pic d'observations deux fois plus important pour les gènes olfa. De plus, on peut voir que l'ensemble des gènes présentent des observations autour de $10^{10}$ alors que les gènes olfa semblent plutôt proches de zéro sur ces valeurs.  
+
+Le second graphique, affiche la densité des moyennes par individu. On peut voir que les valeurs des gènes olfa sont plus faibles que pour l'ensemble des gènes. Caractérisés par une expression dans quelques tissus seulement, il n'est donc pas surprenant de constater que la moyenne par échantillon est plus faible lorsque l'on s'intéresse uniquement aux gènes olfa.
+
+Le troisième graphique affiche la densité des moyennes par gènes. On peut voir qu'il y a un pic autour des valeurs qui sont proches de zéro pour les gènes olfa alors que ce pic n'existe pas pour l'ensemble des gènes. Influencés par la forte présence de zéros, il n'est pas étonnant de constater que la moyenne de ces gènes soit très faible. 
+Nénamoins, on observe une queue de distribution qui laisse penser que quelques gènes pourraient avoir un comportement similaire aux gènes quelconques. Ainsi au sein du groupe des gènes olfa, il y aurait peut être des gènes qui ne porteraient pas cette particularité tissu spécifique. 
+
+
+
+
+
+# La normalisation
+
+Nous allons réaliser des heatmaps à partir des trois de jeux de données normalisées: 
+
+* zero /pas zéro
+* normalisation DESeq2
+* normalisation DESeq2 + pseudo log2
+
+
+
+## Heatmap
+
+Les trois heatmap présentées ci-après utilisent uniquement les données concernant les gènes *OLFA*. 
+
+
+```{r fig.height=9}
+colors = c("cyan", "black", "red")
+cols = colorRampPalette(colors)(20)
+# je sous échantillone 1/4 de la mtrice sinon c trop long
+sub_df_zero = df_zero[sample(rownames(df_zero), 500),]
+data = as.matrix(sub_df_zero[order(sub_df_zero$tissue),olfa_genes])
+gplots::heatmap.2(
+  data,  
+  Rowv=NULL,
+  # Colv=NULL,
+  dendrogram="col",
+  trace="none",
+  col=cols,
+  main="df_zero",
+  mar=c(8,8),
+  useRaster=TRUE
+)
+#La matrice df_zero se représente bien sous forme d’une heatmap, on distigue bien les zéro.
+#C’est bon signe pour notre problématique (les zéros) et pour ce type de normalisation (zero/pas_zero), dans le contexte des gènes OLFA.
+
+```
+
+
+Cette réprésentation, issue du jeu de données normalisées zéro/pas zéros permet de bien visualiser la forte présence de zéro sur l'ensemble du jeu de données. Les colonnes qui sont colorées en bleu représentent les gènes qui sont riches en zéros. Mais il y a aussi des gènes pour lesquels il y a très peu de zéros, ce sont les colonnes qui sont colorées de rouge majoritaire. Comme nous le supposions précédemment, ces gènes ne semblent pas être tissu spécifique comme l'ensemble des autres gènes de cette famille.
+
+```{r fig.height=9}
+colors = c("cyan", "black", "red")
+cols = colorRampPalette(colors)(20)
+# je sous échantillone 1/4 de la mtrice sinon c trop long
+sub_df_norm = df_norm[sample(rownames(df_norm), 500),]
+data = as.matrix(sub_df_norm[order(sub_df_norm$tissue),olfa_genes])
+gplots::heatmap.2(
+  data,  
+  Rowv=NULL,
+  # Colv=NULL,
+  dendrogram="col",
+  trace="none",
+  col=cols,
+  main="df_norm",
+  mar=c(8,8),
+  useRaster=TRUE
+)
+```
+
+
+La normalisation classique est difficile à representer (sur-dispersion), il convient généralement d’appliquer un pseudo log2 les données.
+
+
+```{r fig.height=9}
+colors = c("cyan", "black", "red")
+cols = colorRampPalette(colors)(20)
+# je sous échantillone 1/4 de la mtrice sinon c trop long
+sub_df_lnorm = df_lnorm[sample(rownames(df_lnorm), 500),]
+data = as.matrix(sub_df_lnorm[order(sub_df_lnorm$tissue),olfa_genes])
+gplots::heatmap.2(
+  data,  
+  Rowv=NULL,
+  # Colv=NULL,
+  dendrogram="col",
+  trace="none",
+  col=cols,
+  main="df_lnorm",
+  mar=c(8,8),
+  useRaster=TRUE
+)
+```
+
+La heatmap ci-dessus est élaborée à partir des données normalisées log transformées et on peut voir que l'on obtient les même résultats qu'avec la normalisation zéro/pas zéro.
+
+
+## Quatre classes de gènes
+
+Lors de l'observation des distributions des 384 gènes *OLFA*, nous avons pu déceler quatre types de distributions. Nous avons sélectionné quatre gènes représentatifs de chacunes de ses distributions: 
+
+* **OR2G3** de la classe des gènes riches en zéro avec peu de dispersion sur le reste des données (ci-dessous figure A). 
+Ce type de distribution est majoritaire dans le jeu de données restreint aux gènes *OLFA *.
+* **OR2W3** de la classe des gènes riches en zéro avec beaucoup de dispersions ensuite (figure B)
+* **ADCY3** de la classe des gènes avec absence de zéro et peu de dispersion (figure C)
+* **CAMK2A** de la classe des gènes avec absence de zéro et beaucoup de dispersion (figure D)
+
+Les graphiques suivants, affichent la représentation des distributions de ces quatre gènes réalisés à l'aide des trois jeu de données suivants: 
+
+* `df_zero`
+* `df_norm`
+* `df_lnorm`
+
+Les données brutes ne sont pas utilisées car il y a trop de dispersion.
+
+```{r}
+layout(matrix(1:3, 1, byrow=TRUE), respect=TRUE)
+plot(density(log2(df_zero  [,"OR2G3" ]+1)), main="A. OR2G3  distrib in df_zero  " )
+plot(density(log2(df_norm [,"OR2G3" ]+1)), main="A. OR2G3  distrib in df_norm " )
+plot(density(log2(df_lnorm[,"OR2G3" ]+1)), main="A. OR2G3  distrib in df_lnorm" )
+plot(density(log2(df_zero  [,"OR2W3" ]+1)), main="B. OR2W3  distrib in df_zero  " )
+plot(density(log2(df_norm [,"OR2W3" ]+1)), main="B. OR2W3  distrib in df_norm " )
+plot(density(log2(df_lnorm[,"OR2W3" ]+1)), main="B. OR2W3  distrib in df_lnorm" )
+plot(density(log2(df_zero  [,"ADCY3" ]+1)), main="C. ADCY3  distrib in df_zero  " )
+plot(density(log2(df_norm [,"ADCY3" ]+1)), main="C. ADCY3  distrib in df_norm " )
+plot(density(log2(df_lnorm[,"ADCY3" ]+1)), main="C. ADCY3  distrib in df_lnorm" )
+plot(density(log2(df_zero  [,"CAMK2A"]+1)), main="D. CAMK2A distrib in df_zero  ")
+plot(density(log2(df_norm [,"CAMK2A"]+1)), main="D. CAMK2A distrib in df_norm ")
+plot(density(log2(df_lnorm[,"CAMK2A"]+1)), main="D. CAMK2A distrib in df_lnorm")
+```
+
+
+Ces quatre types de distributions nous font penser aux lois suivantes :
+
+* Bernoulli
+* Normale
+* Poisson
+* Negative Binomiale
+* ZIP : Zero Inflated Poisson
+* ZINB : Zero inflated Negative Binomiale
+
+D’après cette analyse, nous avons conclu qu’il ne nous serait pas possible d’utiliser un seul modèle pour l’ensemble de nos données.
+
+
+
+# Etudes des cofacteurs
+
+
+Les tableaux fournit ci-dessous nous permettent de mieux comprendre la répartition des données.
+
+
+```{r echo=TRUE, results="verbatim"}
+table(sex)
+sort(table(tissue))
+table(tissue, sex)
+```
+
+
+```{r}
+library(knitr)
+library(kableExtra)
+library(tidyverse)
+library(dplyr)
+
+kable(table(sex), format = "html", caption = "Repartition des echantillons par sexe")%>%
+  kable_styling(full_width = F)
+
+```
+
+```{r}
+
+kable(sort(table(tissue)), format = "html", caption = "Repartition des echantillons par tissu")%>%
+  kable_styling(full_width = F)
+```
+
+
+```{r}
+
+kable(table(tissue, sex), format = "html", caption = "Repartition des echantillons par tissu et par sexe")%>%
+  kable_styling(full_width = F)
+```
+
+
+La répartition entre hommes et femmes n'est pas égalitaire, avec 1014 femmes et 1739 hommes.
+
+Au sein des tissus, il n'y a pas une répartition égalitaire d'observations. Le cerveau est le tissu le plus représenté avec 318 observations alors que la bouche est peu représentée avec seulement 5 observations.
+
+### Boxplot Homme Femme
+
+Voici une représentation sous forme de boxplot pour chacun des gènes identifiés précédemment, en fonction du sexe.
+
+```{r, fig.show='hold', out.width="50%", fig.cap="Boxplot en fonction du sexe"}
+#boxplot(data_zero[,1:22904]~data_zero[,22905])
+library(ggplot2)
+  ggplot(data = df_lnorm, aes( x = df_lnorm[,22905] , y = df_lnorm[,"OR2G3"]))+  
+    geom_boxplot()+
+    coord_flip()+
+    theme_minimal()+
+    labs(y = "Valeur d'expression", 
+        x = "Sexe",
+        caption = "\nfigure.2\n",
+        title = "Boxplot Homme vs Femme pour le gene OR2G3",
+        subtitle = " Gene de la classe A\n")+
+        theme(axis.title.y=element_blank())
+
+
+ ggplot(data = df_lnorm, aes( x = df_lnorm[,22905] , y = df_lnorm[,"OR2W3"]))+  
+    geom_boxplot()+
+    coord_flip()+
+    theme_minimal()+
+    labs(y = "Valeur d'expression", 
+        x = "Sexe",
+        caption = "\nfigure.2\n",
+        title = "Boxplot Homme vs Femme pour le gene OR2W3",
+        subtitle = " Gene de la classe B\n")+
+        theme(axis.title.y=element_blank())
+ 
+ ggplot(data = df_lnorm, aes( x = df_lnorm[,22905] , y = df_lnorm[,"ADCY3"]))+  
+    geom_boxplot()+
+    coord_flip()+
+    theme_minimal()+
+    labs(y = "Valeur d'expression", 
+        x = "Sexe",
+        caption = "\nfigure.2\n",
+        title = "Boxplot Homme vs Femme pour le gene ADCY3",
+        subtitle = " Gene de la classe C\n")+
+        theme(axis.title.y=element_blank())
+
+
+ ggplot(data = df_lnorm, aes( x = df_lnorm[,22905] , y = df_lnorm[,"CAMK2A"]))+  
+    geom_boxplot()+
+    coord_flip()+
+    theme_minimal()+
+    labs(y = "Valeur d'expression", 
+        x = "Sexe",
+        caption = "\nfigure.2\n",
+        title = "Boxplot Homme vs Femme pour le gene CAMK2A",
+        subtitle = " Gene de la classe D\n")+
+        theme(axis.title.y=element_blank())
+```
+
+D'après ces graphiques, on peut voir que le sexe ne semble, à priori, pas impacter les valeurs d'expression.
+
+ 
+
+
+
+### Tissus
+
+
+```{r, fig.show='hold', out.width="50%", fig.cap="Proportion de zéro en fonction du tissu"}
+#test ggplot  gene "OR2G3" _ riches en zéro avec peu de dispersions
+library(ggplot2)
+ggplot(data = df_zero, aes( x = df_zero[,22906] , fill = factor(df_zero[,"OR2G3"])  ))+
+  geom_bar(position = "fill")+
+  scale_y_continuous(labels = scales::percent)+
+  theme(legend.position="bottom") +
+  labs(x = "Tissus", 
+        y="Proportion de zero/pas zero",
+        fill = 'Valeurs',
+        caption="\nfigure.A\n",
+        title="Repartition des valeurs pour le gene OR2G3",
+        subtitle = " Gene de la classe A\n")+
+        theme(axis.title.y=element_blank())+
+  theme_minimal()+
+  coord_flip()+
+  scale_fill_manual(values=c("#3399CC", "#E69F00"))
+
+#test ggplot  gene "OR2W3" _ riches en zéro avec beaucoup de dispersion
+ggplot(data = df_zero, aes( x = df_zero[,22906] , fill = factor(df_zero[,"OR2W3"])  ))+
+  geom_bar(position = "fill")+
+  scale_y_continuous(labels = scales::percent)+
+  theme(legend.position="bottom") +
+  labs(x = "Tissus", 
+        y="Proportion de zero/pas zero",
+        fill = 'Valeurs',
+        caption="\nfigure.A\n",
+        title="Repartition des valeurs pour le gene OR2W3",
+        subtitle = " Gene de la classe B\n")+
+        theme(axis.title.y=element_blank())+
+  theme_minimal()+
+  coord_flip()+
+  scale_fill_manual(values=c("#3399CC", "#E69F00"))
+
+#test ggplot  gene "ADCY3" _ pas de zéro avec beaucoup de dispersions
+
+ggplot(data = df_zero, aes( x = df_zero[,22906] , fill = factor(df_zero[,"ADCY3"])  ))+
+  geom_bar(position = "fill")+
+  scale_y_continuous(labels = scales::percent)+
+  theme(legend.position="bottom") +
+  labs(x = "Tissus", 
+        y="Proportion de zero/pas zero",
+        fill = 'Valeurs',
+        caption="\nfigure.C\n",
+        title="Repartition des valeurs pour le gene ADCY3",
+        subtitle = " Gene de la classe C\n")+
+        theme(axis.title.y=element_blank())+
+  theme_minimal()+
+  coord_flip()+
+  scale_fill_manual(values=c("#E69F00"))
+
+
+#test ggplot  gene "CAMK2A" _ pas de zero beaucoup de dispersions
+ggplot(data = df_zero, aes( x = df_zero[,22906] , fill = factor(df_zero[,"CAMK2A"])  ))+
+  geom_bar(position = "fill")+
+  scale_y_continuous(labels = scales::percent)+
+  theme(legend.position="bottom") +
+  labs(x = "Tissus", 
+        y="Proportion de zero/pas zero",
+        fill = 'Valeurs',
+        caption="\nfigure.D\n",
+        title="Repartition des valeurs pour le gene CAMK2A",
+        subtitle = " Gene de la classe D\n")+
+        theme(axis.title.y=element_blank())+
+  theme_minimal()+
+  coord_flip()+
+  scale_fill_manual(values=c("#3399CC", "#E69F00"))
+```
+
+
+Sur le premier graphique, on voit bien que le gène **OR2G3** est fortement enrichi de zéro dans chacun des tissu sauf pour testis et bladder. Le gène de la classe B, semble exprimé dans une forte majorité de tissu et peu exprimé pour haematopoietic_div et fibroplast.
+Les deux derniers graphiques, montrent bien que ces types de gènes sont peu ou pas riche en zéro.
+
+
+
+```{r, fig.show='hold', out.width="50%", fig.cap="Boxplot par tissu"}
+ggplot(data = df_lnorm, aes( x = df_lnorm[,22906] , y = df_lnorm[,"OR2G3"]))+  
+    geom_boxplot()+
+    coord_flip()+
+    theme_minimal()+
+    labs(y = "Valeur d'expression", 
+        x = "Tissus",
+        caption = "\nfigure.2\n",
+        title = "Boxplot en fonction des tissus pour le gene OR2G3",
+        subtitle = " Gene de la classe A\n")+
+        theme(axis.title.y=element_blank())
+
+ggplot(data = df_lnorm, aes( x = df_lnorm[,22906] , y = df_lnorm[,"OR2W3"]))+  
+    geom_boxplot()+
+    coord_flip()+
+    theme_minimal()+
+    labs(y = "Valeur d'expression", 
+        x = "Tissus",
+        caption = "\nfigure.2\n",
+        title = "Boxplot en fonction des tissus pour le gene OR2W3" ,
+        subtitle = " Gene de la classe B\n")+
+        theme(axis.title.y=element_blank())
+
+ggplot(data = df_lnorm, aes( x = df_lnorm[,22906] , y = df_lnorm[, "ADCY3"]))+  
+    geom_boxplot()+
+    coord_flip()+
+    theme_minimal()+
+    labs(y = "Valeur d'expression", 
+        x = "Tissus",
+        caption = "\nfigure.2\n",
+        title = "Boxplot en fonction des tissus pour le gene ADCY3" ,
+        subtitle = " Gene de la classe C\n")+
+        theme(axis.title.y=element_blank())
+
+ggplot(data = df_lnorm, aes( x = df_lnorm[,22906] , y = df_lnorm[, "CAMK2A"]))+  
+    geom_boxplot()+
+    coord_flip()+
+    theme_minimal()+
+    labs(y = "Valeur d'expression", 
+        x = "Tissus",
+        caption = "\nfigure.2\n",
+        title = "Boxplot en fonction des tissus pour le gene CAMK2A" ,
+        subtitle = " Gene de la classe D\n")+
+        theme(axis.title.y=element_blank())
+```
+
+
+Ces boxplot construit à partir des données `lnorm`, montrent qu'en fonction du tissu l'expression du gène varie fortement.
+
+
+# Problématique 
+
+D'après cette exploration, nous avons vu que les gènes olfa étaient caractérisés par une forte présence de zéro. Ceci est directement lié à leur caractéristique de gènes tissu spécifique on/off. La représentation visuelle des donnés à l'aide d'une normalisation zéro/pas zéro, nous apporte déjà beaucoup d'information puisqu'elle permet de mettre en avant cette caractéristique de tissu spécifique. 
+
+C'est pourquoi la modélisation par une loi de bernouilli sur le jeu de données normalisées zéro/non zéro semble être adéquat. Bien que le modèle Bernoulli, avec les données normalisées zéro ou pas zéro, est un modèle réducteur d'information, il semble néanmoins favorable à ce type de modélisation.
+
+Cependant, l'exploration a aussi montré qu'il existe des gènes totalement dépourvus de zéro c'est à dire qu'ils sont exprimés dans l'ensemmble des tissus. Ainsi la modélisation par une loi de bernouilli sur ces derniers, ne peut être une bonne méthode. C'est pourquoi, la recherche d'un autre modèle est envisagé. 
+Un autre facteur important à souligner est la dispersion des données. 
+
+Ainsi, il apparait que plusieurs lois de probablités sont nécessaires pour la modélisation. Nous allons donc explorer la modélisation de ces lois sur les gènes *OLFA* et chercher à savoir s'il existe un modèle plus adatpté pour une classe de gènes. Il se pose une question importante qui est de savoir comment évaluer la pertinence d’un modèle ? 
+Enfin, quel modèle peut nous permettre d'expliquer ces co-cofacteurs? 
+
+Cette approche est une première tentative pour trouver une modélisation des gènes tissu spécifiques et ainsi pouvoir déceler dans d'autres dataset des gènes qui auraient ce même profil.
+
+
+Pour répondre à cette problématique, nous vous présentons les lois qui vont être utilisées pour la modélisations dans la section qui suit. 
+
+
+
+# Session 
+
+```{r, results="verbatim"}
+sessionInfo()
+```
+
+
+
